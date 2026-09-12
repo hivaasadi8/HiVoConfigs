@@ -22,11 +22,17 @@ from urllib.parse import urlparse
 import requests
 from telegram import (
     BotCommand,
-    CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
 )
+try:
+    # این قابلیت فقط در نسخه‌های 21 به بالای کتابخانه هست
+    from telegram import CopyTextButton
+    HAS_COPY = True
+except ImportError:
+    HAS_COPY = False
+
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -245,7 +251,7 @@ def help_text() -> str:
         "        ℹ️ <b>راهنما</b>\n"
         "✦ ━━━━━━━━━━━━━━━━ ✦\n\n"
         "├ 🔢 یه عدد بفرست (۱ تا ۲۵) ← همون تعداد کانفیگ سالم می‌گیری\n"
-        "├ 📋 دکمه «کپی» ← کانفیگ‌ها با یه لمس کپی می‌شن\n"
+        "├ 📋 دکمه «کپی» ← کانفیگ با یه لمس کپی می‌شه\n"
         "├ 🔌 پروتکل‌ها: VMess / VLESS / Trojan / Shadowsocks / Hysteria\n\n"
         "📶 <b>راهنمای کیفیت پینگ:</b>\n"
         f"├ {FULL*5} فوق‌العاده (زیر ۱۵۰ms)\n"
@@ -268,22 +274,24 @@ async def deliver_message(message, n: int):
     total = len(chunks)
     for page, chunk in enumerate(chunks, 1):
         body = []
+        rows = []
         for i, c in enumerate(chunk, start=(page - 1) * CHUNK + 1):
             body.append(
                 f"{fa(i)}. {proto_of(c['uri'])} | ⏱ <b>{fa(c['latency'])}ms</b> {quality(c['latency'])}\n"
                 f"<code>{html.escape(c['uri'])}</code>"
             )
+            # دکمه کپی برای هر کانفیگ — فقط اگر کوتاه‌تر از محدودیت تلگرام باشد
+            if HAS_COPY and len(c["uri"]) <= 250:
+                rows.append([InlineKeyboardButton(
+                    f"📋 کپی کانفیگ {fa(i)}",
+                    copy_text=CopyTextButton(text=c["uri"]),
+                )])
         text = (
             "✦ ━━━━━━━━━━━━━━ ✦\n"
             f"  🚀 <b>کانفیگ‌های منتخب</b> — {fa(page)}/{fa(total)}\n"
             "✦ ━━━━━━━━━━━━━━ ✦\n\n" + "\n\n".join(body)
         )
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "📋 کپی این بخش",
-                copy_text=CopyTextButton(text="\n".join(c["uri"] for c in chunk)),
-            )
-        ]])
+        kb = InlineKeyboardMarkup(rows) if rows else None
         await message.reply_html(text, reply_markup=kb)
         await asyncio.sleep(0.4)
     await message.reply_html(
