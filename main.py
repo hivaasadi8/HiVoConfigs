@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  CONFIG ELITE v3 — ربات (فایل + سابسکرایبشن)
+#  CONFIG ELITE v4 — بدون سقف + پرچم کشورها
 # ══════════════════════════════════════════
 
 import asyncio, html, io, logging, os, re, threading
@@ -16,7 +16,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-from tester import (S, LOCK, refresh_loop, retest_all, MAX_FILE)
+from tester import (S, LOCK, refresh_loop, retest_all)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -48,24 +48,25 @@ def ago(dt):
 
 def menu_text():
     mode = "🧪 تست واقعی تونل Xray" if S["xray"] else "🔌 تست پورت TCP"
-    lines = [
-        "⚡️ <b>CONFIG ELITE</b>",
+    return "\n".join([
+        "⚡️ <b>HiVo Configs</b>",
         "━━━━━━━━━━━━━━━━━━",
-        f"{mode}",
+        mode,
         "",
         f"🟢 سالم: <b>{fa(len(S['good']))}</b>",
         f"🔌 TCP زنده: <b>{fa(S['tcp'])}</b>",
         f"🔬 تست‌شده: <b>{fa(S['tested'])}</b>",
-        f"🧪 Xray: <b>{'فعال' if S['xray'] else 'غیرفعال'}</b>",
         f"🔄 {ago(S['last'])}",
         "━━━━━━━━━━━━━━━━━━",
-        "<i>یه عدد بفرست یا از دکمه‌ها استفاده کن</i>",
-    ]
-    return "\n".join(lines)
+        "<i>هر عددی بفرست — بدون محدودیت</i>",
+    ])
 
 def main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📄 ۱۰۰ کانفیگ", callback_data="file:100"),
+        [InlineKeyboardButton("📄 ۵۰", callback_data="file:50"),
+         InlineKeyboardButton("📄 ۱۰۰", callback_data="file:100"),
+         InlineKeyboardButton("📄 ۲۰۰", callback_data="file:200")],
+        [InlineKeyboardButton("📄 ۵۰۰", callback_data="file:500"),
          InlineKeyboardButton("📄 همه", callback_data="file:all")],
         [InlineKeyboardButton("🔗 سابسکرایبشن", callback_data="sub")],
         [InlineKeyboardButton("📊 آمار", callback_data="stats"),
@@ -76,7 +77,6 @@ def main_menu():
 def stats_text():
     g = S["good"]
     rate = f"{fa(round(len(g) * 100 / S['tested']))}٪" if S["tested"] else "—"
-    up = int((datetime.now() - S["started_"]).total_seconds()) if "started_" in S else 0
     top = "\n".join(
         f"  {fa(i)}. ⏱ {fa(c['latency'])}ms {quality(c['latency'])}"
         f"  <code>{html.escape(str(c['host']))}</code>"
@@ -86,7 +86,7 @@ def stats_text():
     return (
         "📊 <b>آمار زنده</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"📥 جمع‌آوری‌شده: <b>{fa(S['fetched'])}</b>\n"
+        f"📥 جمع‌آوری‌شده از ۱۲ منبع: <b>{fa(S['fetched'])}</b>\n"
         f"🔬 تست‌شده: <b>{fa(S['tested'])}</b>\n"
         f"🔌 زنده TCP: <b>{fa(S['tcp'])}</b>\n"
         f"🟢 سالم نهایی: <b>{fa(len(g))}</b>\n"
@@ -95,40 +95,42 @@ def stats_text():
         f"🏆 <b>برترین‌ها:</b>\n{top}\n\n"
         f"🔄 {ago(S['last'])}\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "⚡️ CONFIG ELITE")
+        "⚡️ HiVo Configs")
 
 def help_text():
     return (
         "ℹ️ <b>راهنما</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "📄 <b>فایل کانفیگ</b>\n"
-        "همه کانفیگ‌های سالم تو یه فایل متنی — بازش کن، همه رو کپی کن و تو کلاینتت Import کن.\n\n"
+        "هر عددی بفرست (۵۰، ۱۰۰، ۱۰۰۰…) ← فایل txt می‌گیری. باز کن، کپی کن، تو کلاینت Import کن.\n\n"
         "🔗 <b>سابسکرایبشن</b>\n"
-        "لینک اختصاصی — تو کلاینتت (بخش Subscription) اضافه‌ش کن، هر ۱۵ دقیقه خودش آپدیت می‌شه.\n\n"
-        "🔢 <b>عدد دلخواه</b>\n"
-        "مثلاً 200 بفرست ← فایل ۲۰۰ کانفیگ می‌گیری.\n\n"
-        "📶 <b>کیفیت پینگ</b> (زمان لود واقعی از داخل تونل)\n"
+        "لینک رو تو کلاینتت اضافه کن — هر ۱۵ دقیقه خودش آپدیت می‌شه.\n\n"
+        "🌍 <b>اسم کانفیگ‌ها</b>\n"
+        "هر کانفیگ = پرچم + کشور + شهر + پینگ واقعی.\n\n"
+        "📶 <b>کیفیت پینگ</b> (لود واقعی از داخل تونل)\n"
         f"{FULL*5} عالی — {FULL*4}{EMPTY} خیلی خوب — {FULL*3}{EMPTY*2} خوب\n\n"
-        "⚡️ CONFIG ELITE")
+        "⚡️ HiVo Configs")
 
 async def send_config_file(message, n):
     g = list(S["good"])
     if not g:
-        await message.reply_text("⏳ هنوز آماده نشده — اولین تست کامل ~۱۰ دقیقه طول می‌کشه.")
+        await message.reply_text("⏳ هنوز آماده نشده — اولین نتایج ~۲ دقیقه دیگه میاد.")
         return
-    if n is None:
-        n = MAX_FILE
-    n = max(1, min(n, MAX_FILE, len(g)))
-    items = g[:n]
+    if n is None or n >= len(g):
+        items = g
+        note = "همه"
+    else:
+        items = g[:n]
+        note = fa(n)
     await message.chat.send_action("upload_document")
     content = "\n".join(c["uri"] for c in items) + "\n"
     buf = io.BytesIO(content.encode())
     caption = (
-        f"⚡️ <b>{fa(len(items))} کانفیگ تأییدشده</b>\n"
-        f"🧪 تست تونل واقعی | ⏱ بهترین: <b>{fa(items[0]['latency'])}ms</b> {quality(items[0]['latency'])}\n"
-        "📥 باز کن ← کپی همه ← Import تو کلاینت"
+        f"⚡️ <b>HiVo Configs — {fa(len(items))} کانفیگ تأییدشده</b>\n"
+        f"🧪 تست تونل واقعی | ⏱ بهترین: <b>{fa(items[0]['latency'])}ms</b>\n"
+        "📥 باز کن ← کپی همه ← Import در کلاینت"
     )
-    await message.reply_document(document=buf, filename=f"HiVo-{len(items)}.txt",
+    await message.reply_document(document=buf, filename=f"HiVo-Configs-{len(items)}.txt",
                                  caption=caption, parse_mode=ParseMode.HTML)
 
 async def cmd_start(update: Update, ctx):
@@ -169,11 +171,10 @@ async def on_button(update: Update, ctx):
         if url:
             txt = ("🔗 <b>سابسکرایبشن اختصاصی</b>\n\n"
                    f"<code>{html.escape(url)}</code>\n\n"
-                   "روی لینک بزن تا کپی شه، بعد تو کلاینتت "
-                   "(بخش Subscription) اضافه‌ش کن.\n"
+                   "لمسش کن تا کپی شه ← تو کلاینت (Subscription) اضافه‌ش کن.\n"
                    "✨ هر ۱۵ دقیقه خودکار آپدیت می‌شه.")
         else:
-            txt = "⏳ هنوز ساخته نشده — بعد از اولین تست کامل (~۱۰ دقیقه) دوباره بزن."
+            txt = "⏳ هنوز ساخته نشده — بعد از اولین دور کامل (~۱۰ دقیقه) دوباره بزن."
         await q.message.reply_html(txt, reply_markup=kb_menu)
     elif data == "menu":
         try:
@@ -214,7 +215,7 @@ def main():
     app.add_handler(CommandHandler("configs", cmd_configs))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    log.info("CONFIG ELITE v3 started")
+    log.info("HiVo Configs v4 started")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
