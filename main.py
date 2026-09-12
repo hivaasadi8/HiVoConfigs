@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-# ══════════════════════════════════════════════
-#   ⚡️ CONFIG ELITE v2 — تست واقعی تونل با Xray
-#   جمع‌آوری + TCP پینگ + اتصال واقعی + تحویل زنده‌ها
-# ══════════════════════════════════════════════
+# ══════════════════════════════════════════
+#   ⚡️ CONFIG ELITE v2 — تست واقعی تونل Xray
+# ══════════════════════════════════════════
 
 import asyncio, base64, html, json, logging, os, platform, random, re
 import socket, subprocess, threading, time, zipfile
@@ -11,7 +10,7 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs, unquote, urlsplit
 
 import requests
-import socks  # pysocks
+import socks
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 try:
     from telegram import CopyTextButton
@@ -32,10 +31,10 @@ SOURCES = [
 
 TCP_TIMEOUT   = 4
 MAX_TO_TEST   = 600
-DEEP_LIMIT    = 80    # بهترین‌های TCP برای تست واقعی تونل
+DEEP_LIMIT    = 80
 WORKERS       = 100
-DEEP_WORKERS  = 12    # تست همزمان تونل
-DEEP_TIMEOUT  = 10    # ثانیه برای هر تونل
+DEEP_WORKERS  = 12
+DEEP_TIMEOUT  = 10
 REFRESH_EVERY = 900
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -44,10 +43,8 @@ log = logging.getLogger("elite")
 S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
      "started": datetime.now(), "xray": False}
 LOCK = threading.Lock()
-
 XRAY_BIN = None
 
-# ──────────── نصب هسته Xray ────────────
 def ensure_xray():
     global XRAY_BIN
     arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
@@ -62,23 +59,23 @@ def ensure_xray():
                 z.extract("xray")
             os.chmod("xray", 0o755)
             XRAY_BIN = os.path.abspath("xray")
-            log.info("✅ هسته Xray نصب شد")
+            log.info("Xray installed")
             return True
         except Exception as e:
-            log.warning(f"دانلود Xray ناموفق: {e}")
+            log.warning(f"xray download failed: {e}")
             time.sleep(5)
     return False
 
-# ──────────── نمایش ────────────
 FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
-def fa(x): return str(x).translate(FA)
+def fa(x):
+    return str(x).translate(FA)
 
 FULL, EMPTY = "▰", "▱"
 def quality(ms):
-    if ms < 300:   return FULL * 5
-    if ms < 700:   return FULL * 4 + EMPTY
-    if ms < 1500:  return FULL * 3 + EMPTY * 2
-    if ms < 3000:  return FULL * 2 + EMPTY * 3
+    if ms < 300: return FULL * 5
+    if ms < 700: return FULL * 4 + EMPTY
+    if ms < 1500: return FULL * 3 + EMPTY * 2
+    if ms < 3000: return FULL * 2 + EMPTY * 3
     return FULL + EMPTY * 4
 
 def ago(dt):
@@ -97,7 +94,6 @@ def proto_of(uri):
             return v
     return "⚙️ Other"
 
-# ──────────── استخراج ────────────
 URI_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2?)://[^\s\"'<>\\]+", re.IGNORECASE)
 
 def b64decode(s):
@@ -145,7 +141,6 @@ def fetch_source(url):
         text = b64decode(text)
     return URI_RE.findall(text)
 
-# ──────────── ساخت کانفیگ Xray از URI ────────────
 def build_stream(net, params, tls=False):
     net = (net or "tcp").lower()
     stream = {"network": net}
@@ -161,9 +156,8 @@ def build_stream(net, params, tls=False):
         if security == "reality":
             s["publicKey"] = params.get("pbk", "")
             s["shortId"] = params.get("sid", "")
-            if params.get("spx"):
-                s["spiderX"] = params["spx"]
-        stream["realitySettings" if security == "reality" else "tlsSettings"] = s
+        key = "realitySettings" if security == "reality" else "tlsSettings"
+        stream[key] = s
     if net == "ws":
         ws = {"path": params.get("path", "/")}
         if params.get("host"):
@@ -180,7 +174,6 @@ def build_stream(net, params, tls=False):
     return stream
 
 def build_outbound(uri):
-    """URI → JSON خروجی Xray (فقط vmess/vless/trojan/ss)"""
     try:
         low = uri.lower()
         if low.startswith("vmess://"):
@@ -192,14 +185,16 @@ def build_outbound(uri):
                                             "users": [{"id": d["id"], "security": d.get("scy", "auto"), "level": 0}]}]},
                     "streamSettings": build_stream(d.get("net", "tcp"), params, tls)}
         if low.startswith("vless://"):
-            p = urlsplit(uri); q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
+            p = urlsplit(uri)
+            q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
             return {"protocol": "vless",
                     "settings": {"vnext": [{"address": p.hostname, "port": p.port,
                                             "users": [{"id": unquote(p.username or ""), "encryption": "none",
                                                        "flow": q.get("flow", ""), "level": 0}]}]},
                     "streamSettings": build_stream(q.get("type", "tcp"), q)}
         if low.startswith("trojan://"):
-            p = urlsplit(uri); q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
+            p = urlsplit(uri)
+            q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
             return {"protocol": "trojan",
                     "settings": {"servers": [{"address": p.hostname, "port": p.port,
                                               "password": unquote(p.username or q.get("password", "")), "level": 0}]},
@@ -224,7 +219,6 @@ def build_outbound(uri):
         return None
     return None
 
-# ──────────── تست واقعی تونل ────────────
 def _free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -238,7 +232,8 @@ def _socks_http_ok(port):
     s.settimeout(6)
     try:
         s.connect(("www.gstatic.com", 80))
-        s.sendall(b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n")
+        req = b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\n\r\n"
+        s.sendall(req)
         data = s.recv(64)
         return b"204" in data
     finally:
@@ -246,10 +241,10 @@ def _socks_http_ok(port):
         except Exception: pass
 
 def deep_test(c):
-    """اتصال واقعی از داخل تونل — جواب ۲۰۴ = کانفیگ واقعاً کار می‌کند"""
     if XRAY_BIN is None:
         return None
-    if c["uri"].lower().split(":")[0] not in ("vmess", "vless", "trojan", "ss"):
+    proto = c["uri"].lower().split(":")[0]
+    if proto not in ("vmess", "vless", "trojan", "ss"):
         return None
     out = build_outbound(c["uri"])
     if out is None:
@@ -270,10 +265,11 @@ def deep_test(c):
         try:
             while time.monotonic() < deadline:
                 if proc.poll() is not None:
-                    break  # xray با این کانفیگ کرش کرد → نامعتبر
+                    break
                 try:
                     if _socks_http_ok(port):
-                        return {**c, "latency": round((time.monotonic() - t0) * 1000)}
+                        ms = round((time.monotonic() - t0) * 1000)
+                        return {**c, "latency": ms}
                 except Exception:
                     time.sleep(0.4)
             return None
@@ -286,7 +282,6 @@ def deep_test(c):
         try: os.remove(path)
         except Exception: pass
 
-# ──────────── حلقه اصلی ────────────
 def refresh_loop():
     global XRAY_BIN
     S["xray"] = ensure_xray()
@@ -296,12 +291,12 @@ def refresh_loop():
             try:
                 uris += fetch_source(url)
             except Exception as e:
-                log.warning(f"منبع خطا: {e}")
+                log.warning(f"source error: {e}")
         uris = list(dict.fromkeys(uris))
         random.shuffle(uris)
         S["fetched"] = len(uris)
         batch = uris[:MAX_TO_TEST]
-        log.info(f"مرحله ۱ — TCP پینگ {len(batch)} کانفیگ...")
+        log.info(f"stage1: tcp ping {len(batch)}")
         tcp_alive = []
         with ThreadPoolExecutor(WORKERS) as pool:
             for r in pool.map(test_one, batch):
@@ -312,22 +307,20 @@ def refresh_loop():
 
         if S["xray"] and tcp_alive:
             cands = tcp_alive[:DEEP_LIMIT]
-            log.info(f"مرحله ۲ — تست تونل واقعی {len(cands)} کانفیگ...")
+            log.info(f"stage2: real tunnel test {len(cands)}")
             alive = []
             with ThreadPoolExecutor(DEEP_WORKERS) as pool:
                 for r in pool.map(deep_test, cands):
                     if r:
                         alive.append(r)
-            alive.sort(key=lambda c: c["latency"])
             if alive:
-                tcp_alive = alive  # فقط تاییدشده‌های واقعی
+                tcp_alive = alive
         tcp_alive.sort(key=lambda c: c["latency"])
         with LOCK:
             S["good"], S["tested"], S["last"] = tcp_alive, len(batch), datetime.now()
-        log.info(f"✅ نهایی: {len(tcp_alive)} (تونل واقعی)" if S["xray"] else f"✅ TCP: {len(tcp_alive)}")
+        log.info(f"done: {len(tcp_alive)} alive")
         time.sleep(REFRESH_EVERY)
 
-# ──────────── متن‌ها ────────────
 def menu_text():
     g = S["good"]
     mode = "🧪 <b>تست واقعی تونل (Xray)</b>" if S["xray"] else "🔌 تست پورت (TCP)"
@@ -336,7 +329,7 @@ def menu_text():
         "    ⚡️ <b>CONFIG ELITE</b> ⚡️",
         "✦ ━━━━━━━━━━━━━━━━ ✦",
         "",
-        f"{mode}",
+        mode,
         "<i>فقط کانفیگ‌هایی که واقعاً اینترنت رد کردن</i>",
         "",
         "📊 <b>وضعیت زنده</b>",
@@ -365,7 +358,8 @@ def stats_text():
     g = S["good"]
     rate = f"{fa(round(len(g) * 100 / S['tested']))}٪" if S["tested"] else "—"
     up = int((datetime.now() - S["started"]).total_seconds())
-    hrs, rem = divmod(up, 3600); mins = rem // 60
+    hrs, rem = divmod(up, 3600)
+    mins = rem // 60
     top = "\n".join(
         f"  {fa(i)}. ⏱ <b>{fa(c['latency'])}ms</b> {quality(c['latency'])}\n"
         f"      <code>{html.escape(str(c['host']))}:{fa(c['port'])}</code>"
@@ -401,29 +395,32 @@ def help_text():
         f"└ {FULL*2}{EMPTY*3} قابل قبول\n\n"
         "⚡️ CONFIG ELITE")
 
-# ──────────── ارسال ────────────
 async def deliver_message(message, n):
     g = list(S["good"])
     if not g:
-        await message.reply_text("⏳ لیست هنوز آماده نشده — تست تونل ۳-۵ دقیقه طول می‌کشه. ی کم دیگه امتحان کن.")
+        await message.reply_text("⏳ لیست هنوز آماده نشده — تست تونل ۳ تا ۵ دقیقه طول می‌کشه.")
         return
     n = max(1, min(n, 25, len(g)))
     await message.chat.send_action("typing")
     chunks = [g[i:i + 5] for i in range(0, n, 5)]
     total = len(chunks)
     for page, chunk in enumerate(chunks, 1):
-        body, rows = [], []
-        for i, c in enumerate(chunk, start=(page - 1) * 5 + 1):
+        body = []
+        rows = []
+        start_i = (page - 1) * 5 + 1
+        for j, c in enumerate(chunk):
+            i = start_i + j
             body.append(
                 f"{fa(i)}. {proto_of(c['uri'])} | ⏱ <b>{fa(c['latency'])}ms</b> {quality(c['latency'])}\n"
                 f"<code>{html.escape(c['uri'])}</code>")
             if HAS_COPY and len(c["uri"]) <= 250:
-                rows.append([InlineKeyboardButton(f"📋 کپی کانفیگ {fa(i)}",
-                                                  copy_text=CopyTextButton(text=c["uri"]))])
+                label = f"📋 کپی کانفیگ {fa(i)}"
+                rows.append([InlineKeyboardButton(label, copy_text=CopyTextButton(text=c["uri"]))])
         text = ("✦ ━━━━━━━━━━━━━━ ✦\n"
                 f"  🚀 <b>کانفیگ‌های تأییدشده</b> — {fa(page)}/{fa(total)}\n"
                 "✦ ━━━━━━━━━━━━━━━━ ✦\n\n" + "\n\n".join(body))
-        await message.reply_html(text, reply_markup=InlineKeyboardMarkup(rows) if rows else None)
+        kb = InlineKeyboardMarkup(rows) if rows else None
+        await message.reply_html(text, reply_markup=kb)
         await asyncio.sleep(0.4)
     await message.reply_html(
         f"✅ <b>{fa(n)} کانفیگ</b> — همه با اتصال واقعی تست شدن!\n"
@@ -443,20 +440,21 @@ async def deliver_query(q, n):
         pass
     await deliver_message(q.message, n)
 
-# ──────────── هندلرها ────────────
 async def cmd_start(update: Update, ctx):
     await update.message.reply_html(menu_text(), reply_markup=main_menu())
 
 async def cmd_stats(update: Update, ctx):
-    await update.message.reply_html(stats_text(),
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]]))
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
+    await update.message.reply_html(stats_text(), reply_markup=kb)
 
 async def cmd_help(update: Update, ctx):
-    await update.message.reply_html(help_text(),
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]]))
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
+    await update.message.reply_html(help_text(), reply_markup=kb)
 
 async def cmd_configs(update: Update, ctx):
-    n = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 10
+    n = 10
+    if ctx.args and ctx.args[0].isdigit():
+        n = int(ctx.args[0])
     await deliver_message(update.message, n)
 
 async def on_text(update: Update, ctx):
@@ -466,6 +464,19 @@ async def on_text(update: Update, ctx):
     else:
         await cmd_start(update, ctx)
 
+async def retest_now():
+    items = list(S["good"])
+    if not items:
+        return []
+    if S["xray"]:
+        with ThreadPoolExecutor(DEEP_WORKERS) as pool:
+            results = pool.map(deep_test, items)
+            return [r for r in results if r]
+    uris = [c["uri"] for c in items]
+    with ThreadPoolExecutor(WORKERS) as pool:
+        results = pool.map(test_one, uris)
+        return [r for r in results if r]
+
 async def on_button(update: Update, ctx):
     q = update.callback_query
     data = q.data
@@ -473,24 +484,49 @@ async def on_button(update: Update, ctx):
     if data.startswith("get:"):
         await deliver_query(q, int(data.split(":")[1]))
     elif data == "menu":
-        try: await q.message.delete()
-        except Exception: pass
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
         await q.message.reply_html(menu_text(), reply_markup=main_menu())
     elif data == "stats":
-        await q.edit_message_text(stats_text(), parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]]))
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
+        await q.edit_message_text(stats_text(), parse_mode=ParseMode.HTML, reply_markup=kb)
     elif data == "help":
-        await q.edit_message_text(help_text(), parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]]))
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
+        await q.edit_message_text(help_text(), parse_mode=ParseMode.HTML, reply_markup=kb)
     elif data == "retest":
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
         await q.edit_message_text("📡 <b>در حال تست مجدد…</b>", parse_mode=ParseMode.HTML)
+        res = await asyncio.get_running_loop().run_in_executor(None, retest_now)
+        res.sort(key=lambda c: c["latency"])
+        with LOCK:
+            if res:
+                S["good"], S["last"] = res, datetime.now()
+        best = f"{fa(res[0]['latency'])}ms" if res else "—"
+        txt = (f"♻️ <b>تست مجدد شد</b>\n\n🟢 سالم: <b>{fa(len(res))}</b>\n"
+               f"⚡️ بهترین: <b>{best}</b>")
+        await q.edit_message_text(txt, parse_mode=ParseMode.HTML, reply_markup=kb)
 
-        def _retest():
-            items = list(S["good"])
-            if not items:
-                return []
-            if S["xray"]:
-                with ThreadPoolExecutor(DEEP_WORKERS) as pool:
-                    return [r for r in pool.map(deep_test, items) if r]
-            with ThreadPoolExecutor(WORKERS) as pool:
-                return [r for r in
+async def post_init(app: Application):
+    await app.bot.set_my_commands([
+                BotCommand("start", "🏠 منوی اصلی"),
+        BotCommand("configs", "🚀 دریافت کانفیگ — /configs 10"),
+        BotCommand("stats", "📊 آمار"),
+        BotCommand("help", "ℹ️ راهنما"),
+    ])
+
+def main():
+    threading.Thread(target=refresh_loop, daemon=True).start()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler(["start", "menu"], cmd_start))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("configs", cmd_configs))
+    app.add_handler(CallbackQueryHandler(on_button))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    log.info("CONFIG ELITE v2 started")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
