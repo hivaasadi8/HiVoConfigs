@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  CONFIG ELITE — موتور تست
-#  جمع‌آوری منابع + TCP پینگ + تونل واقعی Xray + سابسکرایبشن
+#  CONFIG ELITE v4 — موتور تست پرسرعت + GeoIP
+#  ۱۲ منبع + تست موجی + پرچم و نام کشور
 # ══════════════════════════════════════════
 
 import base64, json, logging, os, platform, random, re, socket
 import subprocess, threading, time, zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs, unquote, urlsplit
+from urllib.parse import urlparse, parse_qs, unquote, urlsplit, quote
 
 import requests
 import socks
@@ -16,18 +16,30 @@ import socks
 SOURCES = [
     "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/all.txt",
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
+    "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
+    "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt",
+    "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/mix",
+    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
+    "https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2",
+    "https://raw.githubusercontent.com/freefq/free/master/v2",
+    "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
+    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+    "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
 ]
 
-TCP_TIMEOUT   = 4       # ثانیه
-MAX_TO_TEST   = 12000   # حداکثر تست TCP در هر دور
-DEEP_LIMIT    = 500     # تعداد تست تونل واقعی
-WORKERS       = 100
-DEEP_WORKERS  = 16
-DEEP_TIMEOUT  = 8
-REFRESH_EVERY = 900     # ۱۵ دقیقه
-SUB_LIMIT     = 300     # تعداد کانفیگ داخل لینک ساب
-MAX_FILE      = 1000    # سقف کانفیگ در فایل تحویلی
+# ── اعداد پیشنهادی — آزادی برای تغییر ──
+TCP_TIMEOUT   = 3        # ثانیه انتظار TCP
+MAX_TO_TEST   = 15000    # حداکثر تست TCP در دور کامل
+QUICK_N       = 3000     # دور سریع اول (اولین نتایج)
+DEEP_QUICK    = 250      # تست تونل در دور سریع
+DEEP_FULL     = 800      # تست تونل در دور کامل
+WAVE          = 80       # اندازه هر موج (نتایج زنده منتشر می‌شن)
+WORKERS       = 200      # تردهای TCP
+DEEP_WORKERS  = 40       # تونل‌های همزمان Xray
+DEEP_TIMEOUT  = 6        # ثانیه برای هر تونل
+REFRESH_EVERY = 900      # ۱۵ دقیقه
+SUB_LIMIT     = 500      # کانفیگ داخل سابسکرایبشن
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("elite.tester")
@@ -36,7 +48,55 @@ S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
      "xray": False, "sub": None}
 LOCK = threading.Lock()
 XRAY_BIN = None
+GEO = {}
 
+# ──────────── GeoIP — پرچم و نام کشور ────────────
+def flag_of(cc):
+    if not cc or len(cc) != 2:
+        return "🌐"
+    return "".join(chr(ord(c) + 127397) for c in cc.upper())
+
+def geo_for(host):
+    with threading.Lock():
+        if host in GEO:
+            return GEO[host]
+    try:
+        r = requests.post("http://ip-api.com/batch?fields=status,country,countryCode,city,query",
+                          json=[host], timeout=10)
+        d = r.json()[0] if r.json() else {}
+        if d.get("status") == "success":
+            val = (flag_of(d.get("countryCode")), d.get("country", ""), d.get("city", ""))
+        else:
+            val = ("🌐", "", "")
+    except Exception:
+        val = ("🌐", "", "")
+    with threading.Lock():
+        GEO[host] = val
+    return val
+
+def rename_uri(uri, c):
+    f, country, city = geo_for(c["host"])
+    name = f"HiVo Configs {f} {country}"
+    if city:
+        name += f" | {city}"
+    name += f" | {c['latency']}ms"
+    frag = quote(name, safe="")
+    low = uri.lower()
+    if low.startswith("vmess://"):
+        try:
+            s = uri[8:]
+            s = s.strip().replace("-", "+").replace("_", "/")
+            s += "=" * (-len(s) % 4)
+            d = json.loads(base64.b64decode(s).decode("utf-8", "ignore"))
+            d["ps"] = name
+            out = base64.b64encode(json.dumps(d, ensure_ascii=False).encode()).decode()
+            return "vmess://" + out
+        except Exception:
+            return uri
+    base = uri.split("#", 1)[0]
+    return base + "#" + frag
+
+# ──────────── Xray ────────────
 def ensure_xray():
     global XRAY_BIN
     arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
@@ -193,13 +253,11 @@ def _free_port():
 def _socks_http_ok(port):
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
-    s.settimeout(6)
+    s.settimeout(5)
     try:
         s.connect(("www.gstatic.com", 80))
-        req = b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\n\r\n"
-        s.sendall(req)
-        data = s.recv(64)
-        return b"204" in data
+        s.sendall(b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\n\r\n")
+        return b"204" in s.recv(64)
     finally:
         try:
             s.close()
@@ -237,7 +295,7 @@ def deep_test(c):
                         ms = round((time.monotonic() - t0) * 1000)
                         return {**c, "latency": ms}
                 except Exception:
-                    time.sleep(0.4)
+                    time.sleep(0.3)
             return None
         finally:
             try:
@@ -252,8 +310,43 @@ def deep_test(c):
         except Exception:
             pass
 
+def publish(alive):
+    alive = sorted(alive, key=lambda c: c["latency"])
+    renamed = [ {**c, "uri": rename_uri(c["uri"], c)} for c in alive ]
+    with LOCK:
+        S["good"] = renamed
+        S["last"] = datetime.now()
+
+def run_cycle(uris, deep_limit, label):
+    global S
+    batch = uris[:MAX_TO_TEST]
+    log.info(f"[{label}] tcp stage: {len(batch)}")
+    tcp_alive = []
+    with ThreadPoolExecutor(WORKERS) as pool:
+        for r in pool.map(test_one, batch):
+            if r:
+                tcp_alive.append(r)
+    tcp_alive.sort(key=lambda c: c["latency"])
+    with LOCK:
+        S["tcp"] = len(tcp_alive)
+        S["tested"] = S.get("tested", 0) + len(batch)
+    if not (S["xray"] and tcp_alive):
+        publish(tcp_alive)
+        return tcp_alive
+    cands = tcp_alive[:deep_limit]
+    log.info(f"[{label}] tunnel stage: {len(cands)}")
+    alive = []
+    waves = [cands[i:i + WAVE] for i in range(0, len(cands), WAVE)]
+    for w in waves:
+        with ThreadPoolExecutor(DEEP_WORKERS) as pool:
+            for r in pool.map(deep_test, w):
+                if r:
+                    alive.append(r)
+        publish(alive)
+        log.info(f"[{label}] wave done: {len(alive)} alive")
+    return alive
+
 def upload_sub(text):
-    """آپلود فایل ساب به ریپو — لینک raw برمی‌گرداند"""
     token = os.environ.get("GITHUB_TOKEN", "")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not repo:
@@ -275,45 +368,30 @@ def upload_sub(text):
     return None
 
 def refresh_loop():
-    global XRAY_BIN
     S["xray"] = ensure_xray()
+    first = True
     while True:
         uris = []
         for url in SOURCES:
             try:
                 uris += fetch_source(url)
+                log.info(f"source ok: {url.rsplit('/', 1)[-1]}")
             except Exception as e:
                 log.warning(f"source error: {e}")
         uris = list(dict.fromkeys(uris))
         random.shuffle(uris)
-        S["fetched"] = len(uris)
-        batch = uris[:MAX_TO_TEST]
-        log.info(f"stage1: tcp ping {len(batch)}")
-        tcp_alive = []
-        with ThreadPoolExecutor(WORKERS) as pool:
-            for r in pool.map(test_one, batch):
-                if r:
-                    tcp_alive.append(r)
-        tcp_alive.sort(key=lambda c: c["latency"])
-        S["tcp"] = len(tcp_alive)
-
-        if S["xray"] and tcp_alive:
-            cands = tcp_alive[:DEEP_LIMIT]
-            log.info(f"stage2: tunnel test {len(cands)}")
-            alive = []
-            with ThreadPoolExecutor(DEEP_WORKERS) as pool:
-                for r in pool.map(deep_test, cands):
-                    if r:
-                        alive.append(r)
-            if alive:
-                tcp_alive = alive
-        tcp_alive.sort(key=lambda c: c["latency"])
         with LOCK:
-            S["good"], S["tested"], S["last"] = tcp_alive, len(batch), datetime.now()
-        log.info(f"done: {len(tcp_alive)} alive")
+            S["fetched"] = len(uris)
+        log.info(f"total unique: {len(uris)}")
 
-        if tcp_alive:
-            sub_text = "\n".join(c["uri"] for c in tcp_alive[:SUB_LIMIT])
+        if first:
+            run_cycle(uris[:QUICK_N], DEEP_QUICK, "quick")
+            first = False
+        alive = run_cycle(uris, DEEP_FULL, "full")
+
+        if alive:
+            with LOCK:
+                sub_text = "\n".join(c["uri"] for c in S["good"][:SUB_LIMIT])
             sub_url = upload_sub(sub_text)
             with LOCK:
                 S["sub"] = sub_url
