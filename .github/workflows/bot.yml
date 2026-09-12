@@ -5,6 +5,9 @@ on:
     - cron: "0 */6 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: bot
   cancel-in-progress: true
@@ -22,3 +25,4 @@ jobs:
       - run: python main.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
