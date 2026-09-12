@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs — حافظه دائمی (ذخیره در ریپو)
+#  HiVo Configs — حافظه دائمی + اختصاصی + تنظیمات
 # ══════════════════════════════════════════
 
 import base64, json, logging, os, threading, time
@@ -18,7 +18,10 @@ HDRS = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/vnd.github+js
 
 class Store:
     def __init__(self):
-        self.data = {"users": {}, "admin": None, "totals": {"files": 0, "configs": 0}}
+        self.data = {"users": {}, "admin": None,
+                     "totals": {"files": 0, "configs": 0},
+                     "premium": [],
+                     "settings": {"lock_on": False, "lock_channel": "", "welcome": ""}}
         self._sha = None
         self._dirty = False
         self._lock = threading.Lock()
@@ -35,9 +38,14 @@ class Store:
                 content = base64.b64decode(j.get("content", "")).decode("utf-8", "ignore")
                 d = json.loads(content)
                 if isinstance(d, dict):
-                    self.data.setdefault("users", {})
                     self.data.update(d)
-                log.info(f"store loaded: {len(self.data.get('users', {}))} users")
+                self.data.setdefault("users", {})
+                self.data.setdefault("premium", [])
+                self.data.setdefault("settings", {})
+                for k, v in {"lock_on": False, "lock_channel": "", "welcome": ""}.items():
+                    self.data["settings"].setdefault(k, v)
+                self.data.setdefault("totals", {"files": 0, "configs": 0})
+                log.info(f"store loaded: {len(self.data['users'])} users, {len(self.data['premium'])} premium")
             else:
                 log.info("store: fresh start")
         except Exception as e:
@@ -75,7 +83,6 @@ class Store:
         return False
 
     def touch(self, user_id, first_name="", username=""):
-        """ثبت فعالیت کاربر — اگر اولین کاربر باشد ادمین می‌شود"""
         with self._lock:
             u = self.data["users"].setdefault(str(user_id), {
                 "name": first_name, "user": username,
@@ -87,7 +94,6 @@ class Store:
             u["last"] = datetime.now().isoformat(timespec="seconds")
             if self.data.get("admin") is None:
                 self.data["admin"] = str(user_id)
-                log.info(f"admin auto-set: {user_id}")
             self._dirty = True
 
     def set_admin(self, user_id):
@@ -106,6 +112,31 @@ class Store:
 
     def users(self):
         return self.data.get("users", {})
+
+    def premium(self):
+        return self.data.get("premium", [])
+
+    def add_premium(self, uris):
+        with self._lock:
+            before = len(self.data["premium"])
+            for u in uris:
+                if u not in self.data["premium"]:
+                    self.data["premium"].append(u)
+            added = len(self.data["premium"]) - before
+            self._dirty = True
+            return added
+
+    def clear_premium(self):
+        with self._lock:
+            n = len(self.data["premium"])
+            self.data["premium"] = []
+            self._dirty = True
+            return n
+
+    def set_setting(self, key, value):
+        with self._lock:
+            self.data["settings"][key] = value
+            self._dirty = True
 
     def autosave_loop(self):
         while True:
