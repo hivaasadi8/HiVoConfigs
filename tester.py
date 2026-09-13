@@ -14,14 +14,18 @@ import signal
 
 from store import STORE
 
-TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "3"))
-MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "12000"))
-QUICK_N, DEEP_QUICK, DEEP_LIMIT, WAVE = 1500, 120, 400, 60
-WORKERS = int(os.environ.get("TCP_WORKERS", "150"))
-DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "20"))
-DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "7"))
-SPEED_BYTES = int(os.environ.get("SPEED_BYTES", "524288"))
-REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "900"))
+TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2.5"))
+MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "10000"))
+QUICK_N = int(os.environ.get("QUICK_N", "3000"))
+DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "500"))
+DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "800"))
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "1000"))
+WAVE = int(os.environ.get("WAVE", "100"))
+WORKERS = int(os.environ.get("TCP_WORKERS", "400"))
+DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "50"))
+DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "6"))
+SPEED_BYTES = int(os.environ.get("SPEED_BYTES", "262144"))
+REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "1800"))
 SUB_LIMIT = int(os.environ.get("SUB_LIMIT", "500"))
 XRAY_VERSION = os.environ.get("XRAY_VERSION", "latest")
 XRAY_MIN_SIZE = int(os.environ.get("XRAY_MIN_SIZE", "5000000"))
@@ -89,7 +93,6 @@ def b64decode(s):
 
 
 def parse_config(uri):
-    """یک پاس: proto/host/port + fingerprint واقعی. تست‌ناپذیرها → None"""
     try:
         low = uri.lower()
         if low.startswith("vmess://"):
@@ -656,7 +659,7 @@ def deep_stage(cands, label, seed=None):
                     deep_all.append(r)
         geo_batch(deep_all)
         publish(dedup(deep_all))
-        log.info(f"[{label}] deep wave {i // WAVE + 1}: {len(deep_all)}")
+        log.info(f"[{label}] deep wave {i // WAVE + 1}: total alive {len(deep_all)}")
     return deep_all
 
 
@@ -681,6 +684,20 @@ def upload_sub(text):
     return None
 
 
+def _update_sub_now(label, batch_info=""):
+    try:
+        with LOCK:
+            good = list(S["good"][:SUB_LIMIT])
+        if not good:
+            return
+        url = upload_sub("\n".join(export_uri(c) for c in good))
+        with LOCK:
+            S["sub"] = url
+        log.info(f"[{label}] {batch_info} sub updated → {len(good)} alive")
+    except Exception:
+        log.exception("sub update")
+
+
 def cycle(n_tcp, n_deep, label):
     uris = fetch_all()
     uniq = list(dict.fromkeys(uris))
@@ -691,6 +708,7 @@ def cycle(n_tcp, n_deep, label):
         uniq.sort(key=lambda u: 1 if (parse_config(u) or {}).get("fp") in cached_fps else 0)
     with LOCK:
         S["fetched"] = len(uniq)
+
     seen, parsed = set(), []
     for u in uniq:
         if len(parsed) >= n_tcp:
@@ -704,14 +722,39 @@ def cycle(n_tcp, n_deep, label):
 
     with LOCK:
         seed = list(S["good"])
-    log.info(f"[{label}] tcp candidates: {len(parsed)} (seed {len(seed)})")
-    snap = tcp_stage(parsed, label)
+    total = len(parsed)
+    n_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+    log.info(f"[{label}] total candidates: {total} | seed alive: {len(seed)} | batches: {n_batches}")
+
+    deep_all = list(seed)
+    processed = 0
+
+    for i in range(0, total, BATCH_SIZE):
+        batch = parsed[i:i + BATCH_SIZE]
+        n_batch = i // BATCH_SIZE + 1
+        log.info(f"[{label}] ═══ batch {n_batch}/{n_batches} — TCP test on {len(batch)} ═══")
+
+        snap = tcp_stage(batch, label)
+        with LOCK:
+            S["tested"] = S.get("tested", 0) + len(batch)
+        processed += len(batch)
+        log.info(f"[{label}] batch {n_batch}: TCP passed {len(snap)} / {len(batch)}")
+
+        if S["xray"] and snap:
+            cands = snap[:n_deep]
+            log.info(f"[{label}] batch {n_batch}: deep test on {len(cands)}")
+            deep_all = deep_stage(cands, label, seed=deep_all)
+            publish(dedup(deep_all))
+            with LOCK:
+                alive = len(S["good"])
+            log.info(f"[{label}] ✅ batch {n_batch}/{n_batches} DONE — tested {processed}/{total} — alive: {alive}")
+            _update_sub_now(label, f"batch {n_batch}/{n_batches}:")
+        else:
+            log.warning(f"[{label}] batch {n_batch}: no xray or no TCP survivors")
+
     with LOCK:
-        S["tested"] = S.get("tested", 0) + len(parsed)
-    if S["xray"] and snap:
-        cands = snap[:n_deep]
-        log.info(f"[{label}] deep: {len(cands)}")
-        deep_stage(cands, label, seed=seed)
+        final_alive = len(S["good"])
+    log.info(f"[{label}] ✅✅ ALL {n_batches} batches done — final alive: {final_alive}")
 
 
 def refresh_loop():
@@ -726,23 +769,13 @@ def refresh_loop():
             cycle(MAX_TO_TEST, DEEP_LIMIT, "full")
         except Exception:
             log.exception("cycle")
-        try:
-            with LOCK:
-                good = list(S["good"][:SUB_LIMIT])
-            if good:
-                sub_url = upload_sub("\n".join(export_uri(c) for c in good))
-                with LOCK:
-                    S["sub"] = sub_url
-                log.info(f"sub: {sub_url}")
-        except Exception:
-            log.exception("sub")
+        _update_sub_now("final")
+        log.info(f"⏰ waiting {REFRESH_EVERY}s ({REFRESH_EVERY//60} min) before next cycle")
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
 
 
-# ── تابع جدید برای فراخوانی از CI ──
 def run_cycle():
-    """یک دور تست کامل (برای فراخوانی از CI)."""
     if not S.get("xray"):
         S["xray"] = ensure_xray()
     cycle(QUICK_N, DEEP_QUICK, "ci")
