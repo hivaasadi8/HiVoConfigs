@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs — حافظه دائمی + اختصاصی + تنظیمات
+#  HiVo Configs v8 — حافظه دائمی + رأی کاربران
 # ══════════════════════════════════════════
 
 import base64, json, logging, os, threading, time
@@ -8,7 +8,7 @@ from datetime import datetime
 
 import requests
 
-log = logging.getLogger("elite.store")
+log = logging.getLogger("hivo.store")
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -20,7 +20,7 @@ class Store:
     def __init__(self):
         self.data = {"users": {}, "admin": None,
                      "totals": {"files": 0, "configs": 0},
-                     "premium": [],
+                     "premium": [], "votes": {},
                      "settings": {"lock_on": False, "lock_channel": "", "welcome": ""}}
         self._sha = None
         self._dirty = False
@@ -28,34 +28,30 @@ class Store:
 
     def load(self):
         if not REPO or not TOKEN:
-            log.warning("store: no token, memory only")
+            log.warning("store: memory only")
             return
         try:
             r = requests.get(API, headers=HDRS, timeout=30)
             if r.status_code == 200:
-                j = r.json()
-                self._sha = j.get("sha")
-                content = base64.b64decode(j.get("content", "")).decode("utf-8", "ignore")
-                d = json.loads(content)
+                self._sha = r.json().get("sha")
+                d = json.loads(base64.b64decode(r.json().get("content", "")).decode("utf-8", "ignore"))
                 if isinstance(d, dict):
                     self.data.update(d)
                 self.data.setdefault("users", {})
                 self.data.setdefault("premium", [])
+                self.data.setdefault("votes", {})
+                self.data.setdefault("totals", {"files": 0, "configs": 0})
                 self.data.setdefault("settings", {})
                 for k, v in {"lock_on": False, "lock_channel": "", "welcome": ""}.items():
                     self.data["settings"].setdefault(k, v)
-                self.data.setdefault("totals", {"files": 0, "configs": 0})
-                log.info(f"store loaded: {len(self.data['users'])} users, {len(self.data['premium'])} premium")
-            else:
-                log.info("store: fresh start")
+                log.info(f"store: {len(self.data['users'])} users, {len(self.data['votes'])} votes")
         except Exception as e:
-            log.warning(f"store load failed: {e}")
+            log.warning(f"store load: {e}")
 
     def save(self):
         if not REPO or not TOKEN:
             return False
-        content = base64.b64encode(
-            json.dumps(self.data, ensure_ascii=False).encode()).decode()
+        content = base64.b64encode(json.dumps(self.data, ensure_ascii=False).encode()).decode()
         payload = {"message": "update bot data", "content": content}
         if self._sha:
             payload["sha"] = self._sha
@@ -79,7 +75,7 @@ class Store:
                         return True
             log.warning(f"store save: {r.status_code}")
         except Exception as e:
-            log.warning(f"store save failed: {e}")
+            log.warning(f"store save: {e}")
         return False
 
     def touch(self, user_id, first_name="", username=""):
@@ -101,17 +97,17 @@ class Store:
             self.data["admin"] = str(user_id)
             self._dirty = True
 
-    def add_totals(self, files=0, configs=0):
-        with self._lock:
-            self.data["totals"]["files"] += files
-            self.data["totals"]["configs"] += configs
-            self._dirty = True
-
     def is_admin(self, user_id):
         return self.data.get("admin") == str(user_id)
 
     def users(self):
         return self.data.get("users", {})
+
+    def add_totals(self, files=0, configs=0):
+        with self._lock:
+            self.data["totals"]["files"] += files
+            self.data["totals"]["configs"] += configs
+            self._dirty = True
 
     def premium(self):
         return self.data.get("premium", [])
@@ -133,6 +129,23 @@ class Store:
             self._dirty = True
             return n
 
+    def add_vote(self, vhash, host, ok):
+        with self._lock:
+            v = self.data["votes"].setdefault(vhash, {"host": host, "up": 0, "down": 0})
+            if ok:
+                v["up"] += 1
+            else:
+                v["down"] += 1
+            self._dirty = True
+
+    def get_vote_host(self, vhash):
+        return self.data["votes"].get(vhash, {}).get("host")
+
+    def vote_totals(self):
+        up = sum(v.get("up", 0) for v in self.data["votes"].values())
+        down = sum(v.get("down", 0) for v in self.data["votes"].values())
+        return up, down
+
     def set_setting(self, key, value):
         with self._lock:
             self.data["settings"][key] = value
@@ -145,7 +158,7 @@ class Store:
                 dirty = self._dirty
             if dirty:
                 ok = self.save()
-                log.info(f"store autosave: {'ok' if ok else 'failed'}")
+                log.info(f"autosave: {'ok' if ok else 'failed'}")
 
 
 STORE = Store()
