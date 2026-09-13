@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v8 — موتور تایتان
-#  ۱۷ منبع · تونل واقعی · سرعت واقعی · ضدتکرار
+#  HiVo Configs v9 — موتور زنده
+#  انتشار تدریجی · سرعت واقعی · ضدتکرار
 # ══════════════════════════════════════════
 
 import base64, json, logging, os, platform, random, re, socket, ssl
 import subprocess, threading, time, zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, unquote, urlsplit, quote
 
@@ -33,11 +33,18 @@ SOURCES = [
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
 ]
 
-TCP_TIMEOUT, MAX_TO_TEST = 3, 20000
-DEEP_LIMIT, WAVE = 600, 100
-WORKERS, DEEP_WORKERS, DEEP_TIMEOUT = 200, 30, 6
-SPEED_BYTES = 524288
-REFRESH_EVERY, SUB_LIMIT = 900, 500
+TCP_TIMEOUT   = 3
+MAX_TO_TEST   = 12000
+QUICK_N       = 2500    # دور اولِ سریع — نتیجه زیر ۲ دقیقه
+DEEP_QUICK    = 120     # تست عمیق دور اول
+DEEP_LIMIT    = 400     # تست عمیق دور کامل
+WAVE          = 60
+WORKERS       = 200
+DEEP_WORKERS  = 30
+DEEP_TIMEOUT  = 5
+SPEED_BYTES   = 524288
+REFRESH_EVERY = 900
+SUB_LIMIT     = 500
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("hivo.tester")
@@ -58,10 +65,24 @@ def b64decode(s):
     return base64.b64decode(s).decode("utf-8", "ignore")
 
 def fetch_source(url):
-    text = requests.get(url, timeout=30).text.strip()
+    text = requests.get(url, timeout=25).text.strip()
     if "://" not in text:
         text = b64decode(text)
     return URI_RE.findall(text)
+
+def _safe_fetch(url):
+    try:
+        return fetch_source(url)
+    except Exception as e:
+        log.warning(f"src: {e}")
+        return []
+
+def fetch_all():
+    out = []
+    with ThreadPoolExecutor(8) as pool:
+        for res in pool.map(_safe_fetch, SOURCES):
+            out += res
+    return out
 
 def host_port(uri):
     try:
@@ -214,7 +235,6 @@ def _socks_ok(port):
             pass
 
 def _socks_speed(port):
-    """دانلود واقعی از داخل تونل → مگابایت بر ثانیه"""
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
     s.settimeout(8)
@@ -252,7 +272,6 @@ def _socks_speed(port):
     return None
 
 def deep_test(c):
-    """تونل واقعی + سرعت — برای پروتکل‌های قابل تست"""
     if XRAY_BIN is None:
         return None
     proto = c["uri"].lower().split(":")[0]
@@ -305,11 +324,16 @@ def flag_of(cc):
     return "".join(chr(ord(c) + 127397) for c in cc.upper())
 
 def geo_batch(items):
-    hosts = list({c["host"] for c in items})[:600]
-    for i in range(0, len(hosts), 100):
+    hosts = list({c["host"] for c in items})[:200]
+    todo = []
+    with GEO_LOCK:
+        for h in hosts:
+            if h not in GEO:
+                todo.append(h)
+    for i in range(0, len(todo), 100):
         try:
             r = requests.post("http://ip-api.com/batch?fields=status,country,countryCode,city,query",
-                              json=hosts[i:i + 100], timeout=15)
+                              json=todo[i:i + 100], timeout=15)
             for d in r.json():
                 if d.get("status") == "success":
                     with GEO_LOCK:
@@ -352,12 +376,54 @@ def dedup_hosts(items):
     return list(best.values())
 
 def publish(alive):
-    alive = sorted(alive, key=lambda c: (not c.get("deep"), -(c.get("speed") or 0), c["latency"]))
+    if not alive:
+        return
+    alive = dedup_hosts(alive)
+    alive.sort(key=lambda c: (not c.get("deep"), -(c.get("speed") or 0), c["latency"]))
     renamed = [{**c, "uri": rename_uri(c["uri"], c)} for c in alive]
     with LOCK:
         S["good"] = renamed
         S["fast"] = sum(1 for c in alive if c.get("speed"))
         S["last"] = datetime.now()
+
+def tcp_stage(uris, label):
+    tcp, done = [], 0
+    with ThreadPoolExecutor(WORKERS) as pool:
+        futs = {pool.submit(test_one, u) for u in uris}
+        for fut in as_completed(futs):
+            r = fut.result()
+            if r:
+                tcp.append(r)
+            done += 1
+            if done % 400 == 0 and tcp:
+                snap = dedup_hosts(tcp)
+                snap.sort(key=lambda c: c["latency"])
+                with LOCK:
+                    S["tcp"] = len(snap)
+                geo_batch(snap[:100])
+                publish(snap)
+                log.info(f"[{label}] tcp {done}: alive {len(snap)}")
+    snap = dedup_hosts(tcp)
+    snap.sort(key=lambda c: c["latency"])
+    with LOCK:
+        S["tcp"] = len(snap)
+    return snap
+
+def deep_stage(tcp_alive, limit, label):
+    cands = [c for c in tcp_alive if c["uri"].lower().split(":")[0] in TESTABLE][:limit]
+    deep_ok = []
+    old_deep = [c for c in tcp_alive if c.get("deep")]
+    base = [c for c in tcp_alive if not c.get("deep")][:150]
+    for i in range(0, len(cands), WAVE):
+        wave = cands[i:i + WAVE]
+        with ThreadPoolExecutor(DEEP_WORKERS) as pool:
+            for r in pool.map(deep_test, wave):
+                if r:
+                    deep_ok.append(r)
+        geo_batch(deep_ok)
+        publish(dedup_hosts(deep_ok + old_deep) + base)
+        log.info(f"[{label}] deep wave: {len(deep_ok)}")
+    return deep_ok
 
 def upload_sub(text):
     token = os.environ.get("GITHUB_TOKEN", "")
@@ -379,53 +445,39 @@ def upload_sub(text):
         log.warning(f"sub up: {e}")
     return None
 
-def cycle(deep_limit, label):
-    uris = []
-    for url in SOURCES:
-        try:
-            uris += fetch_source(url)
-        except Exception as e:
-            log.warning(f"src err: {e}")
-    uris = list(dict.fromkeys(uris))
+def cycle(n_quick, deep_quick, deep_limit, label):
+    uris = list(dict.fromkeys(fetch_all()))
     random.shuffle(uris)
     with LOCK:
         S["fetched"] = len(uris)
-    batch = uris[:MAX_TO_TEST]
-    log.info(f"[{label}] tcp: {len(batch)}")
-    tcp = []
-    with ThreadPoolExecutor(WORKERS) as pool:
-        for r in pool.map(test_one, batch):
-            if r:
-                tcp.append(r)
-    tcp = dedup_hosts(tcp)
-    tcp.sort(key=lambda c: c["latency"])
+    log.info(f"[{label}] unique: {len(uris)}")
+    quick = uris[:n_quick]
+    snap = tcp_stage(quick, label)
     with LOCK:
-        S["tcp"] = len(tcp)
-        S["tested"] = S.get("tested", 0) + len(batch)
-    geo_batch(tcp[:150])
-    publish(tcp)
-    if not (S["xray"] and tcp):
-        return tcp
-    cands = [c for c in tcp if c["uri"].lower().split(":")[0] in TESTABLE][:deep_limit]
-    deep_ok = []
-    for i in range(0, len(cands), WAVE):
-        wave = cands[i:i + WAVE]
-        with ThreadPoolExecutor(DEEP_WORKERS) as pool:
-            for r in pool.map(deep_test, wave):
-                if r:
-                    deep_ok.append(r)
-        geo_batch(deep_ok)
-        rest = [c for c in tcp if not c.get("deep")][:200]
-        publish(deep_ok + rest)
-        log.info(f"[{label}] wave {i // WAVE + 1}: {len(deep_ok)}")
-    return deep_ok
+        S["tested"] = S.get("tested", 0) + len(quick)
+    if snap:
+        deep_stage(snap, deep_quick, label)
+    rest = uris[n_quick:MAX_TO_TEST]
+    if rest:
+        snap2 = tcp_stage(rest, label + "-wide")
+        with LOCK:
+            S["tested"] = S.get("tested", 0) + len(rest)
+        merged = dedup_hosts(snap + snap2)
+        merged.sort(key=lambda c: c["latency"])
+        if merged and S["xray"]:
+            deep_stage(merged, deep_limit, label + "-wide")
 
 def refresh_loop():
     S["xray"] = ensure_xray()
-    log.info("titan engine started")
+    log.info("engine v9 started")
+    first = True
     while True:
         try:
-            cycle(DEEP_LIMIT, "full")
+            if first:
+                cycle(QUICK_N, DEEP_QUICK, DEEP_LIMIT, "quick")
+                first = False
+            else:
+                cycle(MAX_TO_TEST, DEEP_LIMIT, DEEP_LIMIT, "full")
         except Exception as e:
             log.exception(f"cycle: {e}")
         try:
@@ -441,22 +493,10 @@ def refresh_loop():
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
 
-def retest_all():
-    items = list(S["good"])[:DEEP_LIMIT]
-    if not items:
-        return []
-    if S["xray"]:
-        with ThreadPoolExecutor(DEEP_WORKERS) as pool:
-            res = [r for r in pool.map(deep_test, items) if r]
-    else:
-        with ThreadPoolExecutor(WORKERS) as pool:
-            res = [r for r in pool.map(test_one, [c["uri"] for c in items]) if r]
-    return res
-
 def test_single(uri):
-    """تستر تکی — یه کانفیگ، جواب فوری"""
+    """تستر تکی — حداکثر ~۱۵ ثانیه، همیشه جواب گویا"""
     host, port = host_port(uri)
-    if not host or not port:
+    if not host or not port or not (0 < port < 65536):
         return None
     c = {"uri": uri, "host": host, "port": port}
     ms = tcp_ping(host, port)
@@ -464,7 +504,7 @@ def test_single(uri):
         return None
     c["latency"] = ms
     proto = uri.lower().split(":")[0]
-    if S["xray"] and proto in TESTABLE:
+    if S.get("xray") and proto in TESTABLE:
         d = deep_test(c)
         if d:
             geo_batch([d])
