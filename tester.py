@@ -14,16 +14,16 @@ import signal
 
 from store import STORE
 
-TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2"))
+TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2.5"))
 MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "30000"))
 QUICK_N = int(os.environ.get("QUICK_N", "15000"))
-DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "1500"))
-DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "1500"))
+DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "600"))
+DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "600"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "500"))
-WAVE = int(os.environ.get("WAVE", "200"))
+WAVE = int(os.environ.get("WAVE", "40"))
 WORKERS = int(os.environ.get("TCP_WORKERS", "500"))
-DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "150"))
-DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "4"))
+DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "40"))
+DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "7"))
 SPEED_BYTES = int(os.environ.get("SPEED_BYTES", "131072"))
 REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "1800"))
 SUB_LIMIT = int(os.environ.get("SUB_LIMIT", "500"))
@@ -247,7 +247,7 @@ def ensure_xray():
     local = os.path.abspath("xray")
     if os.path.exists(local) and _verify_xray_binary(local):
         XRAY_BIN = local
-        log.info("xray: reused cached binary")
+        log.info("xray: reused cached binary ✅")
         return True
 
     arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
@@ -280,10 +280,11 @@ def ensure_xray():
                 log.warning("xray integrity check failed")
                 continue
             XRAY_BIN = local
-            log.info(f"xray ready: {XRAY_VERSION}")
+            log.info(f"xray ready ✅ version={XRAY_VERSION}")
             return True
         except Exception as e:
             log.warning(f"xray: {e}")
+    log.error("❌ XRAY FAILED TO LOAD — deep tests will not run!")
     return False
 
 
@@ -389,7 +390,7 @@ def _free_port():
 def _socks_ok(port):
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
-    s.settimeout(4)
+    s.settimeout(5)
     try:
         s.connect(("www.gstatic.com", 80))
         s.sendall(b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\n\r\n")
@@ -404,7 +405,7 @@ def _socks_ok(port):
 def _socks_speed(port):
     raw = socks.socksocket()
     raw.set_proxy(socks.SOCKS5, "127.0.0.1", port)
-    raw.settimeout(5)
+    raw.settimeout(6)
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -525,7 +526,7 @@ def deep_test(c):
                     ok = True
                     return res
             except Exception:
-                time.sleep(0.2)
+                time.sleep(0.3)
         return None
     except Exception:
         return None
@@ -658,7 +659,7 @@ def deep_stage(cands, label, seed=None):
                     deep_all.append(r)
         geo_batch(deep_all)
         publish(dedup(deep_all))
-        log.info(f"[{label}] deep wave {i // WAVE + 1}: alive {len(deep_all)}")
+        log.info(f"[{label}] deep wave {i // WAVE + 1}: alive {len(S['good'])}")
     return deep_all
 
 
@@ -723,7 +724,7 @@ def cycle(n_tcp, n_deep, label):
         seed = list(S["good"])
     total = len(parsed)
     n_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
-    log.info(f"[{label}] total: {total} | seed: {len(seed)} | batches: {n_batches} | batch_size: {BATCH_SIZE}")
+    log.info(f"[{label}] total: {total} | seed: {len(seed)} | batches: {n_batches} | xray: {S['xray']}")
 
     deep_all = list(seed)
     processed = 0
@@ -747,6 +748,8 @@ def cycle(n_tcp, n_deep, label):
                 alive = len(S["good"])
             log.info(f"[{label}] ✅ batch {n_batch}/{n_batches} DONE — tested {processed}/{total} — alive: {alive}")
             _update_sub_now(label, f"batch {n_batch}/{n_batches}:")
+        else:
+            log.warning(f"[{label}] batch {n_batch}: xray={S['xray']} snap={len(snap)} — deep skipped")
 
     with LOCK:
         final_alive = len(S["good"])
@@ -755,7 +758,7 @@ def cycle(n_tcp, n_deep, label):
 
 def refresh_loop():
     S["xray"] = ensure_xray()
-    log.info("engine v10 started")
+    log.info(f"engine v10 started — xray={S['xray']}")
     first = True
     while True:
         try:
