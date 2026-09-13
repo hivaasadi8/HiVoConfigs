@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v8 — TITAN
-#  تستر تکی · رأی · شانسی · فیلتر · سرعت واقعی
+#  HiVo Configs v9 — TITAN
 # ══════════════════════════════════════════
 
-import asyncio, base64, hashlib, html, io, json, logging, os, re, threading
+import asyncio, base64, hashlib, html, io, json, logging, os, random, re, threading
 from datetime import datetime
 from urllib.parse import quote
 
@@ -13,12 +12,12 @@ import qrcode
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
                       InlineQueryResultArticle, InputTextMessageContent,
                       MenuButtonWebApp, ReactionTypeEmoji, Update, WebAppInfo)
-from telegram.constants import ParseMode
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, InlineQueryHandler,
                           MessageHandler, filters)
 
-from tester import (S, LOCK, refresh_loop, retest_all, test_single,
+from tester import (S, LOCK, refresh_loop, FORCE, test_single,
                     URI_RE, TESTABLE)
 from store import STORE
 
@@ -41,7 +40,7 @@ def fa(x):
 ADMIN_STATE = {}
 PENDING = {}
 
-BANNER = "✦ ━━━━━━━━━━━━━━━━ ✦"
+BANNER = "✦ ━━━━━━━━━━━━━━━━━ ✦"
 TAGLINE = "「 آزادی، یک اتصال فاصله دارد 」"
 FILE_TAG = "「 این‌ها زنده‌اند؛ تو هم باش 」"
 PREMIUM_TAG = "「 چیزهای خاص، برای تو 」"
@@ -145,15 +144,22 @@ def card_text(c, title="🧪 نتیجه تست"):
     loc = f"{c.get('flag', '🌐')} {c.get('country') or 'نامشخص'}"
     if c.get("city"):
         loc += f" | {c['city']}"
-    sp = f"🚀 <b>{fa(c['speed'])}MB/s</b> {speed_bar(c['speed'])}" if c.get("speed") else "🚀 <i>سرعت‌سنجی نشده</i>"
-    mark = "🟢 زنده است" if c.get("deep") else "🟡 پورت باز است (تونل تست نشد)"
+    if c.get("speed"):
+        sp = f"🚀 <b>{fa(c['speed'])}MB/s</b> {speed_bar(c['speed'])}"
+    else:
+        sp = "🚀 <i>سرعت‌سنجی نشد</i>"
+    if c.get("deep"):
+        mark = "🟢 <b>زنده است</b> — تونل واقعی پاس شد"
+    else:
+        mark = "🟡 پورت باز است — تونل کامل تست نشد"
     return (f"{BANNER}\n"
             f"  {title}\n"
             f"{BANNER}\n\n"
             f"{mark}\n"
             f"🌍 {html.escape(loc)}\n"
             f"⏱ <b>{fa(c['latency'])}ms</b> {quality(c['latency'])}\n"
-            f"{sp}\n\n"
+            f"{sp}\n"
+            f"🔌 <tg-spoiler>{html.escape(str(c['host']))}:{fa(c['port'])}</tg-spoiler>\n\n"
             f"「 این یکی نفس می‌کشد 」")
 
 def menu_text():
@@ -169,10 +175,8 @@ def menu_text():
         "",
         wel or "「 کیفیت را حس کن، نه فقط ببین 」",
         "",
-        f"🟢 زنده: <b>{fa(len(g))}</b>",
-        f"🚀 سرعت‌سنجی‌شده: <b>{fa(S.get('fast', 0))}</b>",
-        f"🌍 کشور: <b>{fa(countries)}</b>",
-        f"🗳 رأی کاربران: 👍 {fa(up)} · 👎 {fa(down)}",
+        f"🟢 زنده: <b>{fa(len(g))}</b> · 🚀 سرعت‌سنجی: <b>{fa(S.get('fast', 0))}</b>",
+        f"🌍 کشور: <b>{fa(countries)}</b> · 🗮 👍 {fa(up)} / 👎 {fa(down)}",
         f"🔄 {fa_ago(S['last'])}",
         "",
         "「 یک عدد بفرست، بقیه‌اش با ما 」",
@@ -209,8 +213,8 @@ def stats_text():
     up, down = STORE.vote_totals()
     top = "\n".join(
         f"  {fa(i)}. 🚀 {fa(c['speed'])}MB/s · ⏱ {fa(c['latency'])}ms"
-        f"  <code>{html.escape(str(c['host']))}</code>"
-        for i, c in enumerate([x for x in g if x.get("speed")][:5], 1)) or "  —"
+        f" · <tg-spoiler>{html.escape(str(c['host']))}</tg-spoiler>"
+        for i, c in enumerate([x for x in g if x.get("speed")][:8], 1)) or "  —"
     return (
         f"📊 <b>آمار</b> — {STATS_TAG}\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -222,22 +226,25 @@ def stats_text():
         f"📈 موفقیت: <b>{rate}</b>\n"
         f"🗳 رأی‌ها: 👍 {fa(up)} · 👎 {fa(down)}\n"
         f"🔗 سابسکرایبشن: <b>{sub}</b>\n\n"
-        f"🏆 <b>سریع‌ترین‌ها:</b>\n{top}\n\n"
+        f"🏆 <b>سریع‌ترین‌ها:</b>\n"
+        f"<blockquote expandable>{top}</blockquote>\n\n"
         f"🔄 {fa_ago(S['last'])}")
 
 def help_text(is_admin=False):
     t = (
         "ℹ️ <b>راهنما</b>\n"
-        "「 ساده مثل نفس کشیدن 」\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
+        "「 ساده مثل نفس کشیدن 」\n\n"
+        "<blockquote expandable>"
         "🔢 عدد بفرست ← فایل می‌گیری\n"
-        "🧪 کانفیگ بفرست ← تست واقعی می‌گیری\n"
+        "🧪 کانفیگ بفرست ← تست واقعی فوری\n"
         "⚡️ سریع‌ترین‌ها ← فقط سرعت‌سنجی‌شده‌ها\n"
-        "🎲 شانسی ← یه کانفیگ اتفاقی\n"
-        "🌍 کشورها / 🔌 پروتکل‌ها ← فیلتر\n"
-        "📱 اپ HiVo ← تجربه کامل\n"
+        "🎲 شانسی ← یه کانفیگ اتفاقی با تاس\n"
+        "🌍 کشورها / 🔌 پروتکل‌ها ← فیلتر زنده\n"
+        "📱 اپ HiVo ← تجربه کامل با سرچ\n"
+        "🔍 توی هر چتی: <code>@ربات 10</code>\n"
         "🔗 سابسکرایبشن ← همیشه تازه\n"
-        "👍👎 به کانفیگ‌های تستی رأی بده\n\n"
+        "👍👎 به تست‌ها رأی بده — ربات یاد می‌گیره"
+        "</blockquote>\n\n"
         "「 هر کلید، دری را باز می‌کند 」")
     if is_admin:
         t += "\n\n👑 <b>ادمین:</b> /admin"
@@ -326,7 +333,7 @@ async def send_config_file(message, n=None, items=None, title=None):
         await message.reply_text("⏳ 「 چیزهای خوب، زمان می‌برند 」")
         return
     its = g if (n is None or n >= len(g)) else g[:n]
-    await message.chat.send_action("upload_document")
+    await message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
     content = "\n".join(c["uri"] for c in its) + "\n"
     buf = io.BytesIO(content.encode())
     best = its[0]
@@ -347,7 +354,7 @@ async def send_premium(message):
             "👑 <b>اختصاصی</b>\n\n「 هنوز چیزی اینجا نیست؛ ولی به‌زودی 」")
         return
     uris = [premium_uri(u) for u in prem]
-    await message.chat.send_action("upload_document")
+    await message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
     buf = io.BytesIO(("\n".join(uris) + "\n").encode())
     caption = f"👑 <b>HiVo Premium — {fa(len(uris))} ویژه</b>\n{PREMIUM_TAG}"
     msg = await message.reply_document(document=buf, filename="HiVo-Premium.txt",
@@ -393,7 +400,7 @@ async def on_inline(update, ctx):
                    next_offset=str(offset + 12) if offset + 12 < len(g) else "")
 
 async def run_single_test(message, uri):
-    wait = await message.reply_html("🧪 <b>در حال اتصال واقعی…</b>\n「 صبر؛ داره نفس می‌کشه؟ 」")
+    wait = await message.reply_html("🧪 <b>در حال اتصال واقعی…</b>\n「 حداکثر ۱۵ ثانیه 」")
     res = await asyncio.get_running_loop().run_in_executor(None, test_single, uri.strip())
     if res is None:
         await wait.edit_text("☠️ <b>مُرده است</b>\n「 این یکی به آخر خط رسیده 」")
@@ -410,6 +417,10 @@ async def cmd_start(update, ctx):
     register(update)
     if not await gate(update, ctx):
         return
+    try:
+        await update.message.chat.send_action(ChatAction.CHOOSE_STICKER)
+    except Exception:
+        pass
     await update.message.reply_html(menu_text(),
                                     reply_markup=main_menu(STORE.is_admin(update.effective_user.id)))
 
@@ -473,8 +484,7 @@ def protocols_kb():
         cnt[p] = cnt.get(p, 0) + 1
     names = {"vmess": "🟣 VMess", "vless": "🔵 VLESS", "trojan": "🔴 Trojan",
              "ss": "🟡 Shadowsocks", "hysteria": "🟠 Hysteria", "hysteria2": "🟠 Hysteria2"}
-    rows = [[InlineKeyboardButton(f"{names.get(p, p)} ({fa(ct)})",
-                                  callback_data=f"prt2:{p}")]
+    rows = [[InlineKeyboardButton(f"{names.get(p, p)} ({fa(ct)})", callback_data=f"prt2:{p}")]
             for p, ct in sorted(cnt.items(), key=lambda kv: -kv[1])]
     rows.append([InlineKeyboardButton("🔙 منو", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
@@ -575,7 +585,7 @@ async def on_button(update, ctx):
         if fasts:
             await send_config_file(q.message, items=fasts, title="⚡️ سریع‌ترین‌ها")
         else:
-            await q.message.reply_html("⏳ 「 سرعت‌سنجی هنوز شروع نشده — چند دقیقه صبر 」")
+            await q.message.reply_html("⏳ 「 سرعت‌سنجی هنوز شروع نشده — ۲ دقیقه صبر 」")
     elif data == "rnd":
         if not await gate(update, ctx):
             return
@@ -583,6 +593,8 @@ async def on_button(update, ctx):
         if not g:
             await q.message.reply_html("⏳ 「 هنوز چیزی نیست 」")
             return
+        await q.message.reply_dice(emoji="🎲")
+        await asyncio.sleep(2.5)
         c = random.choice(g)
         vh = vhash_of(c["host"])
         PENDING[vh] = {"host": c["host"], "uri": c["uri"]}
@@ -595,7 +607,7 @@ async def on_button(update, ctx):
         await q.message.reply_html(
             "🧪 <b>تستر تکی</b>\n\n"
             "هر کانفیگی داری (vmess:// یا vless:// یا …) همین‌جا بفرست —\n"
-            "تونل واقعی + سرعت + کشور، همون لحظه.\n\n"
+            "تونل واقعی + سرعت + کشور، حداکثر ۱۵ ثانیه.\n\n"
             "「 محک بزن، اگر دوام آورد مال توئه 」")
     elif data == "cty":
         await q.message.reply_html("🌍 <b>یک کشور انتخاب کن</b>", reply_markup=countries_kb())
@@ -604,7 +616,7 @@ async def on_button(update, ctx):
             return
         name = data.split(":", 1)[1]
         items = [c for c in S["good"] if c.get("country") == name]
-        await send_config_file(q.message, items=items, title=f"{name}")
+        await send_config_file(q.message, items=items, title=name)
     elif data == "prt":
         await q.message.reply_html("🔌 <b>یک پروتکل انتخاب کن</b>", reply_markup=protocols_kb())
     elif data.startswith("prt2:"):
@@ -633,16 +645,8 @@ async def on_button(update, ctx):
     elif data == "help":
         await q.edit_message_text(help_text(is_admin), parse_mode=ParseMode.HTML, reply_markup=kb_menu)
     elif data == "retest":
-        await q.edit_message_text("📡 「 صبر؛ کیفیت ساخته می‌شود 」", parse_mode=ParseMode.HTML)
-        res = await asyncio.get_running_loop().run_in_executor(None, retest_all)
-        with LOCK:
-            if res:
-                from tester import publish
-                publish(res)
-        best = f"{fa(res[0]['latency'])}ms" if res else "—"
-        await q.edit_message_text(
-            f"♻️ <b>تازه شد</b>\n🟢 {fa(len(res))} زنده\n⚡️ {best}",
-            parse_mode=ParseMode.HTML, reply_markup=kb_menu)
+        FORCE.set()
+        await q.edit_message_text("📡 「 دور تازه شروع شد — نتایج زنده می‌آید 」", parse_mode=ParseMode.HTML)
     elif data == "adm" and is_admin:
         await q.edit_message_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_kb())
     elif data == "adm:add" and is_admin:
@@ -726,7 +730,7 @@ def main():
     app.add_handler(InlineQueryHandler(on_inline))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    log.info("HiVo Configs v8 TITAN started")
+    log.info("HiVo Configs v9 TITAN started")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
