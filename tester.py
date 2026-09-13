@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v10 — Core Engine
+#  HiVo Configs v10 — Core Engine  (patched)
 # ══════════════════════════════════════════
-
 import base64, hashlib, json, logging, os, platform, random, re
 import socket, ssl, subprocess, threading, time, zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,11 +10,6 @@ from urllib.parse import urlparse, parse_qs, unquote, urlsplit, quote
 
 import requests
 import socks
-
-try:
-    import resource
-except ImportError:
-    resource = None
 import signal
 
 from store import STORE
@@ -25,7 +19,7 @@ QUICK_N, DEEP_QUICK, DEEP_LIMIT, WAVE = 1500, 120, 400, 60
 WORKERS, DEEP_WORKERS, DEEP_TIMEOUT = 150, 20, 5
 SPEED_BYTES, REFRESH_EVERY, SUB_LIMIT = 524288, 900, 500
 XRAY_VERSION = "v24.12.18"
-XRAY_MIN_SIZE, XRAY_MEM = 5_000_000, 256 * 1024 * 1024
+XRAY_MIN_SIZE = 5_000_000
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("hivo.core")
@@ -34,8 +28,10 @@ S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
      "xray": False, "sub": None, "fast": 0}
 LOCK = threading.Lock()
 FORCE = threading.Event()
+
 XRAY_BIN = None
 SRC_HEALTH = {}
+_HLOCK = threading.Lock()  # FIX: SRC_HEALTH is mutated from a thread-pool; guard it
 STAB = {}
 _SL = threading.Lock()
 GEO, _GLOCK = {}, threading.Lock()
@@ -63,10 +59,12 @@ DEFAULT_SOURCES = [
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
 ]
 
+
 def b64decode(s):
     s = s.strip().replace("-", "+").replace("_", "/")
     s += "=" * (-len(s) % 4)
     return base64.b64decode(s).decode("utf-8", "ignore")
+
 
 def parse_config(uri):
     """یک پاس: proto/host/port + fingerprint واقعی. تست‌ناپذیرها → None"""
@@ -79,11 +77,12 @@ def parse_config(uri):
             if not host or not (0 < port < 65536):
                 return None
             key = "|".join(("vmess", host.lower(), str(port),
-                            str(d.get("id", "")).lower(), str(d.get("net", "")).lower(),
-                            str(d.get("tls", "")).lower(), str(d.get("sni", "")).lower(),
-                            str(d.get("path", ""))))
+                             str(d.get("id", "")).lower(), str(d.get("net", "")).lower(),
+                             str(d.get("tls", "")).lower(), str(d.get("sni", "")).lower(),
+                             str(d.get("path", ""))))
             return {"proto": "vmess", "host": host, "port": port,
                     "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+
         if low.startswith("ss://"):
             body = uri[5:].split("#")[0]
             if "@" in body:
@@ -102,6 +101,7 @@ def parse_config(uri):
             key = "|".join(("ss", host.lower(), str(port), userinfo))
             return {"proto": "ss", "host": host, "port": port,
                     "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+
         if low.startswith(("vless://", "trojan://")):
             p = urlsplit(uri)
             if not p.hostname or not p.port:
@@ -113,14 +113,15 @@ def parse_config(uri):
             else:
                 ident = unquote(p.username or "") or q.get("password", "")
             key = "|".join((proto, p.hostname.lower(), str(p.port), ident.lower(),
-                            q.get("type", "tcp").lower(), q.get("security", "").lower(),
-                            q.get("sni", q.get("host", "")).lower(), q.get("path", ""),
-                            q.get("pbk", "").lower(), q.get("flow", "").lower()))
+                             q.get("type", "tcp").lower(), q.get("security", "").lower(),
+                             q.get("sni", q.get("host", "")).lower(), q.get("path", ""),
+                             q.get("pbk", "").lower(), q.get("flow", "").lower()))
             return {"proto": proto, "host": p.hostname, "port": p.port,
                     "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
         return None
     except Exception:
         return None
+
 
 def current_sources():
     srcs = STORE.data.get("sources")
@@ -128,50 +129,65 @@ def current_sources():
         return list(srcs)
     return list(DEFAULT_SOURCES)
 
+
 def fetch_source(url):
-    text = requests.get(url, timeout=25).text.strip()
+    r = requests.get(url, timeout=25)
+    r.raise_for_status()  # FIX: was missing — silently accepted error pages as content
+    text = r.text.strip()
     if "://" not in text:
         text = b64decode(text)
     return URI_RE.findall(text)
 
+
 def _safe_fetch(url):
-    h = SRC_HEALTH.setdefault(url, {"ok": 0, "fail": 0, "last_count": 0, "cooldown_until": 0})
-    if h["cooldown_until"] > time.time():
+    with _HLOCK:
+        h = SRC_HEALTH.setdefault(url, {"ok": 0, "fail": 0, "last_count": 0, "cooldown_until": 0})
+        cooling = h["cooldown_until"] > time.time()
+    if cooling:
         return None
     try:
         res = fetch_source(url)
-        h["ok"] += 1
-        h["fail"] = 0
-        h["last_count"] = len(res)
+        with _HLOCK:
+            h["ok"] += 1
+            h["fail"] = 0
+            h["last_count"] = len(res)
         return res
     except Exception as e:
-        h["fail"] += 1
-        if h["fail"] >= 3:
-            h["cooldown_until"] = time.time() + 1800
-            log.warning(f"source cooldown: {url.rsplit('/', 1)[-1]}")
+        with _HLOCK:
+            h["fail"] += 1
+            if h["fail"] >= 3:
+                h["cooldown_until"] = time.time() + 1800
+                log.warning(f"source cooldown: {url.rsplit('/', 1)[-1]}")
         log.warning(f"src: {e}")
         return None
 
+
 def fetch_all():
     out = []
+    with _HLOCK:
+        snapshot = {u: dict(h) for u, h in SRC_HEALTH.items()}
     ordered = sorted(current_sources(),
-                     key=lambda u: (-(SRC_HEALTH.get(u, {}).get("ok", 0)
-                                      if SRC_HEALTH.get(u, {}).get("ok", 0) + SRC_HEALTH.get(u, {}).get("fail", 0) else 0),
-                                    SRC_HEALTH.get(u, {}).get("fail", 0)))
+                      key=lambda u: (-(snapshot.get(u, {}).get("ok", 0)
+                                       if snapshot.get(u, {}).get("ok", 0) + snapshot.get(u, {}).get("fail", 0) else 0),
+                                     snapshot.get(u, {}).get("fail", 0)))
     with ThreadPoolExecutor(6) as pool:
         for res in pool.map(_safe_fetch, ordered):
             if res:
                 out += res
     return out
 
+
 def source_report():
     out = []
+    with _HLOCK:
+        snapshot = {u: dict(h) for u, h in SRC_HEALTH.items()}
     for u in current_sources():
-        h = SRC_HEALTH.get(u, {})
+        h = snapshot.get(u, {})
         out.append({"url": u, "ok": h.get("ok", 0), "fail": h.get("fail", 0),
                     "count": h.get("last_count", 0),
                     "cooldown": max(0, int(h.get("cooldown_until", 0) - time.time()))})
     return out
+
 
 def tcp_ping(host, port):
     try:
@@ -181,28 +197,50 @@ def tcp_ping(host, port):
     except Exception:
         return None
 
+
 def tcp_probe(c):
     ms = tcp_ping(c["host"], c["port"])
     if ms is None:
         return None
     c["latency"] = ms
     return c
-    
+
+
+def _verify_xray_binary(path):
+    """Runs `xray version` and returns True if it looks like a real, working binary."""
+    try:
+        os.chmod(path, 0o755)
+        out = subprocess.run([path, "version"], capture_output=True, text=True, timeout=10)
+        return out.returncode == 0 and "Xray" in (out.stdout or "")
+    except Exception:
+        return False
+
+
 def ensure_xray():
     global XRAY_BIN
     if XRAY_BIN and os.access(XRAY_BIN, os.X_OK):
         return True
+
+    # FIX: reuse a binary that's already sitting next to us (e.g. restored by
+    # actions/cache in CI) instead of unconditionally re-downloading every run.
+    local = os.path.abspath("xray")
+    if os.path.exists(local) and _verify_xray_binary(local):
+        XRAY_BIN = local
+        log.info("xray: reused cached binary")
+        return True
+
     arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
     name = f"Xray-linux-{arch}.zip"
     urls = [f"https://github.com/XTLS/Xray-core/releases/download/{XRAY_VERSION}/{name}"]
     try:
         rel = requests.get("https://api.github.com/repos/XTLS/Xray-core/releases/latest",
-                           timeout=30, headers={"User-Agent": "hivo"}).json()
+                            timeout=30, headers={"User-Agent": "hivo"}).json()
         latest = next((a["browser_download_url"] for a in rel.get("assets", []) if a["name"] == name), None)
         if latest:
             urls.append(latest)
     except Exception:
         pass
+
     for url in urls:
         try:
             data = requests.get(url, timeout=240).content
@@ -212,30 +250,16 @@ def ensure_xray():
             open("xray.zip", "wb").write(data)
             with zipfile.ZipFile("xray.zip") as z:
                 z.extract("xray")
-            os.chmod("xray", 0o755)
-            out = subprocess.run([os.path.abspath("xray"), "version"],
-                                 capture_output=True, text=True, timeout=10)
-            if out.returncode != 0 or "Xray" not in (out.stdout or ""):
+            if not _verify_xray_binary(local):
                 log.warning("xray integrity check failed")
                 continue
-            XRAY_BIN = os.path.abspath("xray")
-            log.info(f"xray ready: {(out.stdout or '').splitlines()[0] if out.stdout else XRAY_VERSION}")
+            XRAY_BIN = local
+            log.info(f"xray ready: {XRAY_VERSION}")
             return True
         except Exception as e:
             log.warning(f"xray: {e}")
     return False
 
-def _limits():
-    if resource is None:
-        return
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (XRAY_MEM, XRAY_MEM))
-    except Exception:
-        pass
-    try:
-        resource.setrlimit(resource.RLIMIT_CPU, (15, 15))
-    except Exception:
-        pass
 
 def _kill(proc):
     try:
@@ -247,6 +271,7 @@ def _kill(proc):
         proc.kill()
     except Exception:
         pass
+
 
 def build_stream(net, params, tls=False):
     net = (net or "tcp").lower()
@@ -277,6 +302,7 @@ def build_stream(net, params, tls=False):
         stream["httpSettings"] = {"path": params.get("path", "/"), "host": [params.get("host", "")]}
     return stream
 
+
 def build_outbound(uri):
     try:
         low = uri.lower()
@@ -285,23 +311,26 @@ def build_outbound(uri):
             params = {"host": d.get("host", ""), "path": d.get("path", ""), "sni": d.get("sni", "")}
             return {"protocol": "vmess",
                     "settings": {"vnext": [{"address": d["add"], "port": int(d["port"]),
-                                            "users": [{"id": d["id"], "security": d.get("scy", "auto"), "level": 0}]}]},
+                                             "users": [{"id": d["id"], "security": d.get("scy", "auto"), "level": 0}]}]},
                     "streamSettings": build_stream(d.get("net", "tcp"), params, str(d.get("tls", "")).lower() == "tls")}
+
         if low.startswith("vless://"):
             p = urlsplit(uri)
             q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
             return {"protocol": "vless",
                     "settings": {"vnext": [{"address": p.hostname, "port": p.port,
-                                            "users": [{"id": unquote(p.username or ""), "encryption": "none",
-                                                       "flow": q.get("flow", ""), "level": 0}]}]},
+                                             "users": [{"id": unquote(p.username or ""), "encryption": "none",
+                                                        "flow": q.get("flow", ""), "level": 0}]}]},
                     "streamSettings": build_stream(q.get("type", "tcp"), q)}
+
         if low.startswith("trojan://"):
             p = urlsplit(uri)
             q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
             return {"protocol": "trojan",
                     "settings": {"servers": [{"address": p.hostname, "port": p.port,
-                                              "password": unquote(p.username or q.get("password", "")), "level": 0}]},
+                                               "password": unquote(p.username or q.get("password", "")), "level": 0}]},
                     "streamSettings": build_stream(q.get("type", "tcp"), q, tls=True)}
+
         if low.startswith("ss://"):
             body = uri[5:].split("#")[0]
             if "@" in body:
@@ -317,10 +346,11 @@ def build_outbound(uri):
             host, port = hostport.rsplit(":", 1)
             return {"protocol": "shadowsocks",
                     "settings": {"servers": [{"address": host.strip("[]"), "port": int(port),
-                                              "method": method, "password": pwd}]}}
+                                               "method": method, "password": pwd}]}}
     except Exception:
         return None
     return None
+
 
 def _free_port():
     s = socket.socket()
@@ -328,6 +358,7 @@ def _free_port():
     p = s.getsockname()[1]
     s.close()
     return p
+
 
 def _socks_ok(port):
     s = socks.socksocket()
@@ -342,6 +373,7 @@ def _socks_ok(port):
             s.close()
         except Exception:
             pass
+
 
 def _socks_speed(port):
     raw = socks.socksocket()
@@ -382,16 +414,19 @@ def _socks_speed(port):
         except Exception:
             pass
 
+
 def _stab_update(fp, ok):
     with _SL:
         st = STAB.setdefault(fp, [0, 0])
         st[0 if ok else 1] += 1
 
+
 def _stab_of(fp):
     with _SL:
         p, f = STAB.get(fp, [0, 0])
-    t = p + f
-    return round(p / t, 2) if t else 0.5
+        t = p + f
+        return round(p / t, 2) if t else 0.5
+
 
 def score_of(c):
     s = 40.0
@@ -401,6 +436,7 @@ def score_of(c):
     s += 10.0 * (c["stability"] if c.get("stability") is not None else 0.5)
     s += {"vless": 3, "trojan": 2, "vmess": 2, "ss": 1}.get(c.get("proto"), 0)
     return int(max(0, min(100, round(s))))
+
 
 def deep_test(c):
     if XRAY_BIN is None or c["proto"] not in TESTABLE:
@@ -419,9 +455,17 @@ def deep_test(c):
     try:
         with open(path, "w") as f:
             json.dump(cfg, f)
+        # FIX: dropped `preexec_fn=_limits`. Calling resource.setrlimit() in a
+        # preexec_fn while the parent process is multi-threaded is a known
+        # fork()/thread deadlock hazard in CPython (locks held by other
+        # threads never get released in the child before exec()). With ~170
+        # worker threads running concurrently here, this could silently hang
+        # the whole engine over time. The 5s DEEP_TIMEOUT + _kill() below
+        # already bound how long any single xray process can run, so the
+        # rlimit safety net wasn't pulling its weight against that risk.
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", path],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                start_new_session=True, preexec_fn=_limits)
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
         t0 = time.monotonic()
         deadline = t0 + DEEP_TIMEOUT
         while time.monotonic() < deadline:
@@ -454,11 +498,13 @@ def deep_test(c):
             pass
         if not ok:
             _stab_update(c["fp"], False)
-            
+
+
 def flag_of(cc):
     if not cc or len(cc) != 2:
         return "🌐"
     return "".join(chr(ord(c) + 127397) for c in cc.upper())
+
 
 def geo_batch(items):
     todo = sorted({c["host"] for c in items if c.get("host") and c["host"] not in GEO})[:100]
@@ -467,7 +513,7 @@ def geo_batch(items):
             break
         try:
             r = requests.post("http://ip-api.com/batch?fields=status,country,countryCode,city,query",
-                              json=todo, timeout=12)
+                               json=todo, timeout=12)
             got = set()
             for d in r.json():
                 if d.get("status") == "success":
@@ -483,6 +529,7 @@ def geo_batch(items):
         with _GLOCK:
             f, n, city = GEO.get(c["host"], ("🌐", "", ""))
         c["flag"], c["country"], c["city"] = f, n, city
+
 
 def export_uri(c):
     name = f"HiVo ⭐{c.get('score', 0)}"
@@ -507,8 +554,10 @@ def export_uri(c):
             return uri
     return uri.split("#", 1)[0] + "#" + quote(name, safe="")
 
+
 def _rank(c):
     return (1 if c.get("deep") else 0, c.get("score", 0), -c.get("latency", 9999))
+
 
 def dedup(items):
     best = {}
@@ -521,6 +570,7 @@ def dedup(items):
             best[fp] = c
     return list(best.values())
 
+
 def publish(alive):
     alive = [c for c in dedup(alive) if c.get("deep")]
     if not alive:
@@ -531,10 +581,12 @@ def publish(alive):
         S["fast"] = sum(1 for c in alive if c.get("speed"))
         S["last"] = datetime.now()
 
+
 def publish_tcp(snap):
     snap = dedup(snap)
     with LOCK:
         S["tcp"] = len(snap)
+
 
 def tcp_stage(cands, label):
     tcp, done = [], 0
@@ -552,6 +604,7 @@ def tcp_stage(cands, label):
     publish_tcp(snap)
     return snap
 
+
 def deep_stage(cands, label, seed=None):
     deep_all = list(seed or [])
     for i in range(0, len(cands), WAVE):
@@ -564,6 +617,7 @@ def deep_stage(cands, label, seed=None):
         publish(dedup(deep_all))
         log.info(f"[{label}] deep wave {i // WAVE + 1}: {len(deep_all)}")
     return deep_all
+
 
 def upload_sub(text):
     token = os.environ.get("GITHUB_TOKEN", "")
@@ -585,9 +639,15 @@ def upload_sub(text):
         log.warning(f"sub up: {e}")
     return None
 
+
 def cycle(n_tcp, n_deep, label):
     uris = fetch_all()
     uniq = list(dict.fromkeys(uris))
+    # FIX: shuffle BEFORE capping to n_tcp, not after. Previously the shuffle
+    # happened only on the already-capped `parsed` list, so whichever sources
+    # happened to be first in `current_sources()` always won every single
+    # candidate slot and sources further down the list were never tested.
+    random.shuffle(uniq)
     with LOCK:
         S["fetched"] = len(uniq)
     seen, parsed = set(), []
@@ -600,7 +660,7 @@ def cycle(n_tcp, n_deep, label):
         seen.add(c["fp"])
         c["uri"] = u
         parsed.append(c)
-    random.shuffle(parsed)
+
     with LOCK:
         seed = list(S["good"])
     log.info(f"[{label}] tcp candidates: {len(parsed)} (seed {len(seed)})")
@@ -611,6 +671,7 @@ def cycle(n_tcp, n_deep, label):
         cands = snap[:n_deep]
         log.info(f"[{label}] deep: {len(cands)}")
         deep_stage(cands, label, seed=seed)
+
 
 def refresh_loop():
     S["xray"] = ensure_xray()
@@ -636,6 +697,7 @@ def refresh_loop():
             log.exception("sub")
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
+
 
 def test_single(uri):
     c = parse_config(uri)

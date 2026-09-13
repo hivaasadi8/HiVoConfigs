@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v10 — Store
+#  HiVo Configs v10 — Store  (patched)
 #  Race-safe · Backend-swappable · Bounded
 # ══════════════════════════════════════════
-
 import base64, json, logging, os, threading, time
 from datetime import datetime
 
@@ -13,7 +12,6 @@ log = logging.getLogger("hivo.store")
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
-
 MAX_USERS = 3000
 MAX_USER_VOTES = 300
 
@@ -31,7 +29,7 @@ class GitHubJSONBackend:
     def __init__(self):
         self.api = f"https://api.github.com/repos/{REPO}/contents/data/bot.json"
         self.headers = {"Authorization": f"Bearer {TOKEN}",
-                        "Accept": "application/vnd.github+json"}
+                         "Accept": "application/vnd.github+json"}
 
     @property
     def available(self):
@@ -53,7 +51,11 @@ class GitHubJSONBackend:
         r = requests.put(self.api, headers=self.headers, json=payload, timeout=30)
         if r.status_code in (200, 201):
             return r.json()["content"]["sha"]
-        if r.status_code == 409:
+        # FIX: retry conflict resolution up to twice (was once) — a bit more
+        # resilient if another writer touches the file at nearly the same time.
+        for _ in range(2):
+            if r.status_code != 409:
+                break
             rr = requests.get(self.api, headers=self.headers, timeout=30)
             if rr.status_code == 200:
                 payload["sha"] = rr.json().get("sha")
@@ -65,7 +67,8 @@ class GitHubJSONBackend:
 
 def _copy(v):
     return json.loads(json.dumps(v))
-    
+
+
 class Store:
     """تمام عملیات دامنه زیر یک قفل — بدون Race Condition."""
 
@@ -103,14 +106,13 @@ class Store:
             if not self.backend.available:
                 return False
             snapshot = _copy(self.data)
-        sha = self.backend.save(snapshot, self._sha)
-        if sha:
-            with self._lock:
+            sha = self.backend.save(snapshot, self._sha)
+            if sha:
                 self._sha = sha
                 self._dirty = False
-            return True
-        log.warning("store save failed")
-        return False
+                return True
+            log.warning("store save failed")
+            return False
 
     def autosave_loop(self):
         while True:
@@ -134,7 +136,7 @@ class Store:
                 self.data["admin"] = str(user_id)
             if len(self.data["users"]) > MAX_USERS:
                 old = sorted(self.data["users"].items(),
-                             key=lambda kv: kv[1].get("last") or "")
+                              key=lambda kv: kv[1].get("last") or "")
                 for uid, _ in old[:len(self.data["users"]) - MAX_USERS]:
                     del self.data["users"][uid]
             self._dirty = True
@@ -143,6 +145,7 @@ class Store:
         with self._lock:
             self.data["admin"] = str(user_id)
             self._dirty = True
+        self.save()  # FIX: admin identity is safety-critical — persist immediately
 
     def is_admin(self, user_id):
         with self._lock:
@@ -170,14 +173,19 @@ class Store:
                     self.data["premium"].append(u)
             added = len(self.data["premium"]) - before
             self._dirty = True
-            return added
+        # FIX: admin-authored content — don't leave it riding on the next
+        # 180s autosave tick; a process kill (e.g. Actions concurrency
+        # cancellation) between now and then would lose it silently.
+        self.save()
+        return added
 
     def clear_premium(self):
         with self._lock:
             n = len(self.data["premium"])
             self.data["premium"] = []
             self._dirty = True
-            return n
+        self.save()  # FIX: immediate persist, see add_premium
+        return n
 
     def vote(self, user_id, fhash, host, val):
         """val: +1/-1 → 'added' | 'changed' | 'same' — هر کاربر یک رأی"""
@@ -211,7 +219,7 @@ class Store:
         with self._lock:
             up = sum(v.get("up", 0) for v in self.data.get("votes", {}).values())
             down = sum(v.get("down", 0) for v in self.data.get("votes", {}).values())
-        return up, down
+            return up, down
 
     def sources(self):
         with self._lock:
@@ -224,7 +232,8 @@ class Store:
                 return False
             lst.append(url)
             self._dirty = True
-            return True
+        self.save()  # FIX: immediate persist
+        return True
 
     def remove_source(self, url):
         with self._lock:
@@ -232,18 +241,22 @@ class Store:
             if url in lst:
                 lst.remove(url)
                 self._dirty = True
-                return True
-            return False
+            else:
+                return False
+        self.save()  # FIX: immediate persist
+        return True
 
     def reset_sources(self):
         with self._lock:
             self.data["sources"] = []
             self._dirty = True
+        self.save()  # FIX: immediate persist
 
     def set_setting(self, key, value):
         with self._lock:
             self.data["settings"][key] = value
             self._dirty = True
+        self.save()  # FIX: immediate persist (welcome text / channel lock)
 
 
 STORE = Store()

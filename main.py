@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v10 — TITAN
+#  HiVo Configs v10 — TITAN  (patched)
 # ══════════════════════════════════════════
-
 import asyncio, base64, html, io, json, logging, os, random, re, threading
 from datetime import datetime
 from urllib.parse import quote
 
 import qrcode
-
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
-                      InlineQueryResultArticle, InputTextMessageContent,
-                      MenuButtonWebApp, ReactionTypeEmoji, Update, WebAppInfo)
+                       InlineQueryResultArticle, InputTextMessageContent,
+                       MenuButtonWebApp, ReactionTypeEmoji, Update, WebAppInfo)
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
-                          ContextTypes, InlineQueryHandler,
-                          MessageHandler, filters)
+                           ContextTypes, InlineQueryHandler,
+                           MessageHandler, filters)
 
 from tester import (S, LOCK, FORCE, refresh_loop, test_single, parse_config,
                     export_uri, current_sources, source_report, URI_RE)
@@ -23,7 +21,6 @@ from store import STORE
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OWNER = "8343701928"
-
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
 APP_URL = ""
 if REPO and "/" in REPO:
@@ -34,8 +31,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 log = logging.getLogger("hivo")
 
 FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
 def fa(x):
     return str(x).translate(FA)
+
 
 STARTED = datetime.now()
 ADMIN_STATE = {}
@@ -48,6 +48,7 @@ PREMIUM_TAG = "「 چیزهای خاص، برای تو 」"
 STATS_TAG = "「 اعداد دروغ نمی‌گویند 」"
 LOCK_TAG = "「 اول عضو شو، بعد برگرد 」"
 
+
 def quality(ms):
     if ms < 300:
         return "🟩🟩🟩🟩🟩"
@@ -56,6 +57,7 @@ def quality(ms):
     if ms < 1500:
         return "🟩🟩🟨🟨⬜️"
     return "🟨🟨⬜️⬜️⬜️"
+
 
 def speed_bar(v):
     if not v:
@@ -68,6 +70,7 @@ def speed_bar(v):
         return "🟩🟩🟨🟨⬜️"
     return "🟨⬜️⬜️⬜️⬜️"
 
+
 def fa_ago(dt):
     if not dt:
         return "—"
@@ -78,21 +81,25 @@ def fa_ago(dt):
         return f"{fa(s // 60)} دقیقه پیش"
     return f"{fa(s // 3600)} ساعت پیش"
 
+
 def uptime():
     s = int((datetime.now() - STARTED).total_seconds())
     h, rem = divmod(s, 3600)
     return f"{fa(h)}س {fa(rem // 60)}د"
+
 
 def register(update):
     u = update.effective_user
     if u:
         STORE.touch(u.id, u.first_name or "", u.username or "")
 
+
 async def react(message, emoji="⚡️"):
     try:
         await message.set_reaction(reaction=[ReactionTypeEmoji(emoji)])
     except Exception:
         pass
+
 
 async def gate(update, ctx):
     st = STORE.data["settings"]
@@ -106,7 +113,11 @@ async def gate(update, ctx):
         m = await ctx.bot.get_chat_member(ch, uid)
         if m.status not in ("left", "kicked"):
             return True
-    except Exception:
+    except Exception as e:
+        # FIX: log this — a silently-misconfigured lock channel (wrong
+        # @username, or bot not an admin there) used to fail open with no
+        # trace at all, which looked identical to "lock is just off".
+        log.warning(f"gate: get_chat_member failed for {ch!r}: {e}")
         return True
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{ch.lstrip('@')}")],
@@ -115,6 +126,7 @@ async def gate(update, ctx):
     await update.effective_message.reply_html(
         f"⚡️ <b>HiVo Configs</b>\n\n{LOCK_TAG}", reply_markup=kb)
     return False
+
 
 def premium_uri(uri):
     name = "HiVo Premium 👑"
@@ -131,12 +143,14 @@ def premium_uri(uri):
             return uri
     return uri.split("#", 1)[0] + "#" + quote(name, safe="")
 
+
 def qr_bytes(url):
     img = qrcode.make(url, box_size=8, border=2)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
+
 
 def card_text(c, title="🧪 نتیجه تست"):
     loc = f"{c.get('flag', '🌐')} {c.get('country') or 'نامشخص'}"
@@ -154,6 +168,7 @@ def card_text(c, title="🧪 نتیجه تست"):
             f"{sp}\n"
             f"🔌 <tg-spoiler>{html.escape(str(c['host']))}:{fa(c['port'])}</tg-spoiler>")
 
+
 def menu_text():
     wel = STORE.data["settings"].get("welcome", "").strip()
     g = S["good"]
@@ -161,7 +176,7 @@ def menu_text():
     up, down = STORE.vote_totals()
     return "\n".join([
         BANNER,
-        "      ⚡️ <b>HiVo Configs</b>",
+        "  ⚡️ <b>HiVo Configs</b>",
         TAGLINE,
         BANNER,
         "",
@@ -175,6 +190,7 @@ def menu_text():
         "",
         "「 یک عدد بفرست، بقیه‌اش با ما 」",
     ])
+
 
 def main_menu(is_admin=False):
     rows = []
@@ -200,6 +216,7 @@ def main_menu(is_admin=False):
         rows.append([InlineKeyboardButton("👑 پنل ادمین", callback_data="adm")])
     return InlineKeyboardMarkup(rows)
 
+
 def stats_text():
     g = S["good"]
     rate = f"{fa(round(len(g) * 100 / S['tested']))}٪" if S["tested"] else "—"
@@ -211,7 +228,7 @@ def stats_text():
         f" · ⏱ {fa(c['latency'])}ms"
         f" · <tg-spoiler>{html.escape(str(c['host']))}</tg-spoiler>"
         for i, c in enumerate(sorted([x for x in g if x.get("speed")],
-                                     key=lambda c: -c.get("score", 0))[:8], 1)) or "  —"
+                                      key=lambda c: -c.get("score", 0))[:8], 1)) or "  —"
     return (
         f"📊 <b>آمار</b> — {STATS_TAG}\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -227,7 +244,8 @@ def stats_text():
         f"🏆 <b>برترین‌ها:</b>\n"
         f"<blockquote expandable>{top}</blockquote>\n\n"
         f"🔄 {fa_ago(S['last'])} · ⏱ {uptime()}")
-  
+
+
 def help_text(is_admin=False):
     t = (
         "ℹ️ <b>راهنما</b>\n「 ساده مثل نفس کشیدن 」\n\n"
@@ -247,6 +265,7 @@ def help_text(is_admin=False):
         t += "\n\n👑 <b>ادمین:</b> /admin"
     return t
 
+
 def admin_panel_text():
     st = STORE.data["settings"]
     lock = f"🟢 {st.get('lock_channel', '')}" if st.get("lock_on") else "⚪️ خاموش"
@@ -256,6 +275,7 @@ def admin_panel_text():
         f"📜 اختصاصی: <b>{fa(len(STORE.premium()))}</b>\n"
         f"📡 منابع: <b>{fa(len(current_sources()))}</b>\n"
         f"📢 قفل کانال: <b>{lock}</b>")
+
 
 def admin_kb():
     return InlineKeyboardMarkup([
@@ -268,6 +288,7 @@ def admin_kb():
         [InlineKeyboardButton("⚙️ تنظیمات", callback_data="adm:set")],
         [InlineKeyboardButton("🏠 منو", callback_data="menu")],
     ])
+
 
 def sources_text():
     lines = []
@@ -289,6 +310,7 @@ def sources_text():
             f"<blockquote expandable>{body}</blockquote>\n\n"
             "منابع خراب خودکار استراحت می‌گیرند (⏸).")
 
+
 def sources_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ افزودن", callback_data="src:add"),
@@ -296,6 +318,7 @@ def sources_kb():
         [InlineKeyboardButton("♻️ ریست به پیش‌فرض", callback_data="src:reset")],
         [InlineKeyboardButton("🔙 پنل", callback_data="adm")],
     ])
+
 
 def settings_text():
     st = STORE.data["settings"]
@@ -306,6 +329,7 @@ def settings_text():
         f"✏️ متن خوش‌آمد: <i>{html.escape(wel[:60])}</i>\n"
         f"📢 قفل کانال: <b>{'🟢 روشن' if st.get('lock_on') else '⚪️ خاموش'}</b>")
 
+
 def settings_kb():
     st = STORE.data["settings"]
     lock_label = "🔓 خاموش کن" if st.get("lock_on") else "🔒 روشن کن"
@@ -315,6 +339,7 @@ def settings_kb():
          InlineKeyboardButton(lock_label, callback_data="adm:lock")],
         [InlineKeyboardButton("🔙 پنل", callback_data="adm")],
     ])
+
 
 def users_text():
     users = STORE.users()
@@ -334,6 +359,7 @@ def users_text():
         f"⚡️ کانفیگ: <b>{fa(tot.get('configs', 0))}</b>\n\n"
         f"🏆 <b>پرکاربردتر‌ها:</b>\n{body}")
 
+
 async def do_broadcast(ctx, text, status_msg):
     users = STORE.users()
     ok = fail = 0
@@ -346,6 +372,7 @@ async def do_broadcast(ctx, text, status_msg):
         await asyncio.sleep(0.06)
     extra = f"\n❌ {fa(fail)}" if fail else ""
     await status_msg.edit_text(f"✅ رفت به {fa(ok)} نفر{extra}")
+
 
 async def send_config_file(message, n=None, items=None, title=None):
     g = sorted(list(S["good"]), key=lambda c: -c.get("score", 0)) if items is None else list(items)
@@ -363,9 +390,10 @@ async def send_config_file(message, n=None, items=None, title=None):
         f"{FILE_TAG}\n"
         f"⭐️ {fa(best.get('score', 0))} · ⏱ {fa(best['latency'])}ms{sp} {quality(best['latency'])}")
     msg = await message.reply_document(document=buf, filename=f"HiVo-{len(its)}.txt",
-                                       caption=caption, parse_mode=ParseMode.HTML)
+                                        caption=caption, parse_mode=ParseMode.HTML)
     await react(msg)
     STORE.add_totals(files=1, configs=len(its))
+
 
 async def send_premium(message):
     prem = STORE.premium()
@@ -378,9 +406,10 @@ async def send_premium(message):
     buf = io.BytesIO(("\n".join(uris) + "\n").encode())
     caption = f"👑 <b>HiVo Premium — {fa(len(uris))} ویژه</b>\n{PREMIUM_TAG}"
     msg = await message.reply_document(document=buf, filename="HiVo-Premium.txt",
-                                       caption=caption, parse_mode=ParseMode.HTML)
+                                        caption=caption, parse_mode=ParseMode.HTML)
     await react(msg, "🔥")
     STORE.add_totals(files=1, configs=len(uris))
+
 
 async def send_sub_qr(message):
     url = S.get("sub")
@@ -388,11 +417,12 @@ async def send_sub_qr(message):
         await message.reply_html("⏳ 「 هنوز در راه است 」")
         return
     msg = await message.reply_photo(photo=qr_bytes(url),
-                                    caption=("🔗 <b>QR سابسکرایبشن</b>\n"
-                                             "از گوشی دوم اسکن کن یا لینک را بگیر:\n"
-                                             f"<code>{html.escape(url)}</code>"),
-                                    parse_mode=ParseMode.HTML)
+                                     caption=("🔗 <b>QR سابسکرایبشن</b>\n"
+                                              "از گوشی دوم اسکن کن یا لینک را بگیر:\n"
+                                              f"<code>{html.escape(url)}</code>"),
+                                     parse_mode=ParseMode.HTML)
     await react(msg)
+
 
 async def on_inline(update, ctx):
     q = update.inline_query
@@ -417,7 +447,8 @@ async def on_inline(update, ctx):
                 parse_mode=ParseMode.HTML),
         ))
     await q.answer(results, cache_time=10, is_personal=True,
-                   next_offset=str(offset + 12) if offset + 12 < len(g) else "")
+                    next_offset=str(offset + 12) if offset + 12 < len(g) else "")
+
 
 async def run_single_test(message, uri):
     wait = await message.reply_html("🧪 <b>در حال اتصال واقعی…</b>\n「 حداکثر ~۲۰ ثانیه 」")
@@ -446,12 +477,14 @@ async def run_single_test(message, uri):
     await wait.edit_text(card_text(res), parse_mode=ParseMode.HTML, reply_markup=kb)
     await react(message)
 
+
 async def cmd_start(update, ctx):
     register(update)
     if not await gate(update, ctx):
         return
     await update.message.reply_html(menu_text(),
-                                    reply_markup=main_menu(STORE.is_admin(update.effective_user.id)))
+                                     reply_markup=main_menu(STORE.is_admin(update.effective_user.id)))
+
 
 async def cmd_admin(update, ctx):
     register(update)
@@ -459,10 +492,12 @@ async def cmd_admin(update, ctx):
         return
     await update.message.reply_html(admin_panel_text(), reply_markup=admin_kb())
 
+
 async def cmd_users(update, ctx):
     if not STORE.is_admin(update.effective_user.id):
         return
     await update.message.reply_html(users_text())
+
 
 async def cmd_broadcast(update, ctx):
     if not STORE.is_admin(update.effective_user.id):
@@ -476,9 +511,11 @@ async def cmd_broadcast(update, ctx):
     status = await update.message.reply_text("📣 در راه‌اند…")
     await do_broadcast(ctx, text, status)
 
+
 async def cmd_cancel(update, ctx):
     ADMIN_STATE.pop(update.effective_user.id, None)
     await update.message.reply_html("「 برگشتی 」")
+
 
 async def cmd_configs(update, ctx):
     register(update)
@@ -489,10 +526,12 @@ async def cmd_configs(update, ctx):
         n = int(ctx.args[0])
     await send_config_file(update.message, n)
 
+
 async def cmd_stats(update, ctx):
     register(update)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
     await update.message.reply_html(stats_text(), reply_markup=kb)
+
 
 def countries_kb():
     cnt, flagmap = {}, {}
@@ -506,6 +545,7 @@ def countries_kb():
     rows.append([InlineKeyboardButton("🔙 منو", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
 
+
 def protocols_kb():
     cnt = {}
     for c in S["good"]:
@@ -515,11 +555,13 @@ def protocols_kb():
             for p, ct in sorted(cnt.items(), key=lambda kv: -kv[1])]
     rows.append([InlineKeyboardButton("🔙 منو", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
-  
+
+
 async def on_text(update, ctx):
     register(update)
     uid = update.effective_user.id
     txt = (update.message.text or "").strip()
+
     if STORE.is_admin(uid) and uid in ADMIN_STATE:
         state = ADMIN_STATE[uid]
         if txt.lower() == "/cancel":
@@ -533,12 +575,12 @@ async def on_text(update, ctx):
             ADMIN_STATE.pop(uid, None)
             ok = STORE.add_source(txt.strip())
             await update.message.reply_html("✅ منبع اضافه شد — از دور بعد اعمال می‌شود." if ok
-                                            else "⚠️ قبلاً اضافه شده.")
+                                             else "⚠️ قبلاً اضافه شده.")
         elif state == "src:del":
             ADMIN_STATE.pop(uid, None)
             ok = STORE.remove_source(txt.strip())
             await update.message.reply_html("🗑 حذف شد." if ok
-                                            else "⚠️ تو لیست اختصاصی نبود (منابع پیش‌فرض حذف نمی‌شن).")
+                                             else "⚠️ تو لیست اختصاصی نبود (منابع پیش‌فرض حذف نمی‌شن).")
         elif state == "premium":
             ADMIN_STATE.pop(uid, None)
             uris = URI_RE.findall(txt)
@@ -575,6 +617,7 @@ async def on_text(update, ctx):
             status = await update.message.reply_text("📣 در راه‌اند…")
             await do_broadcast(ctx, txt, status)
         return
+
     if "://" in txt:
         if not await gate(update, ctx):
             return
@@ -582,6 +625,7 @@ async def on_text(update, ctx):
         if m:
             await run_single_test(update.message, m.group(0))
             return
+
     if not await gate(update, ctx):
         return
     m = re.search(r"\d+", txt)
@@ -589,6 +633,7 @@ async def on_text(update, ctx):
         await send_config_file(update.message, int(m.group()))
     else:
         await cmd_start(update, ctx)
+
 
 async def on_button(update, ctx):
     register(update)
@@ -655,7 +700,7 @@ async def on_button(update, ctx):
              InlineKeyboardButton("👎 نشد", callback_data=f"vote:0:{c['fp']}")],
             [InlineKeyboardButton("🎲 یکی دیگه", callback_data="rnd")]])
         await q.message.reply_html(card_text(c, "🎲 شانسی"),
-                                   parse_mode=ParseMode.HTML, reply_markup=kb)
+                                    parse_mode=ParseMode.HTML, reply_markup=kb)
     elif data == "tester":
         await q.message.reply_html(
             "🧪 <b>تستر تکی</b>\n\n"
@@ -702,7 +747,7 @@ async def on_button(update, ctx):
     elif data == "retest":
         FORCE.set()
         await q.edit_message_text("📡 「 دور تازه شروع شد — نتایج زنده می‌آید 」",
-                                  parse_mode=ParseMode.HTML)
+                                   parse_mode=ParseMode.HTML)
     elif data == "adm" and is_admin:
         await q.edit_message_text(admin_panel_text(), parse_mode=ParseMode.HTML, reply_markup=admin_kb())
     elif data == "adm:src" and is_admin:
@@ -710,7 +755,7 @@ async def on_button(update, ctx):
     elif data == "src:add" and is_admin:
         ADMIN_STATE[uid] = "src:add"
         await q.message.reply_html("🔗 <b>لینک منبع را بفرست</b>\n"
-                                   "(لینک raw که داخلش لینک کانفیگ باشد)\n\n/cancel انصراف")
+                                    "(لینک raw که داخلش لینک کانفیگ باشد)\n\n/cancel انصراف")
     elif data == "src:del" and is_admin:
         ADMIN_STATE[uid] = "src:del"
         await q.message.reply_html("🔗 <b>لینک منبع را دقیقاً بفرست</b> تا حذف شود\n\n/cancel انصراف")
@@ -728,7 +773,7 @@ async def on_button(update, ctx):
         else:
             buf = io.BytesIO(("\n".join(prem) + "\n").encode())
             await q.message.reply_document(buf, filename="premium-raw.txt",
-                                           caption=f"📜 {fa(len(prem))} کانفیگ اختصاصی")
+                                            caption=f"📜 {fa(len(prem))} کانفیگ اختصاصی")
     elif data == "adm:clear" and is_admin:
         n = STORE.clear_premium()
         await q.message.reply_html(f"🗑 {fa(n)} کانفیگ پاک شد.")
@@ -738,8 +783,8 @@ async def on_button(update, ctx):
         await q.message.reply_html("📣 <b>متن پیام را بفرست</b>\n\n/cancel برای انصراف")
     elif data == "adm:stats" and is_admin:
         await q.edit_message_text(users_text(), parse_mode=ParseMode.HTML,
-                                  reply_markup=InlineKeyboardMarkup(
-                                      [[InlineKeyboardButton("🔙 پنل", callback_data="adm")]]))
+                                   reply_markup=InlineKeyboardMarkup(
+                                       [[InlineKeyboardButton("🔙 پنل", callback_data="adm")]]))
     elif data == "adm:set" and is_admin:
         await q.edit_message_text(settings_text(), parse_mode=ParseMode.HTML, reply_markup=settings_kb())
     elif data == "adm:wel" and is_admin:
@@ -755,6 +800,7 @@ async def on_button(update, ctx):
         STORE.set_setting("lock_on", not st.get("lock_on"))
         await q.edit_message_text(settings_text(), parse_mode=ParseMode.HTML, reply_markup=settings_kb())
 
+
 async def on_error(update, ctx):
     log.error("handler error", exc_info=ctx.error)
     try:
@@ -762,6 +808,7 @@ async def on_error(update, ctx):
             await update.effective_message.reply_text("⚠️ یه خطای موقت پیش اومد — دوباره امتحان کن.")
     except Exception:
         pass
+
 
 async def post_init(app):
     await app.bot.set_my_commands([
@@ -781,21 +828,37 @@ async def post_init(app):
         except Exception as e:
             log.warning(f"menu button: {e}")
 
+
 async def post_shutdown(app):
     ok = STORE.save()
     log.info(f"final save: {ok}")
 
+
 def main():
     STORE.load()
     forced = os.environ.get("ADMIN_ID", "").strip()
-    STORE.set_admin(forced or OWNER)
+    # FIX: previously this was `STORE.set_admin(forced or OWNER)`, which ran
+    # unconditionally on every process start — since the process restarts
+    # every ~6h (see workflow), the persisted admin was silently overwritten
+    # back to the hardcoded OWNER id on every single restart, even if it had
+    # legitimately been changed. Now: an explicit ADMIN_ID env var always
+    # wins (useful for recovery), otherwise the persisted admin from the
+    # store is left alone, and OWNER is only used to bootstrap a brand-new
+    # store that has never had an admin at all.
+    if forced:
+        STORE.set_admin(forced)
+    elif STORE.data.get("admin") is None:
+        STORE.set_admin(OWNER)
+
     threading.Thread(target=refresh_loop, daemon=True).start()
     threading.Thread(target=STORE.autosave_loop, daemon=True).start()
+
     app = (Application.builder()
            .token(BOT_TOKEN)
            .post_init(post_init)
            .post_shutdown(post_shutdown)
            .build())
+
     app.add_handler(CommandHandler(["start", "menu"], cmd_start))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("users", cmd_users))
@@ -807,8 +870,17 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)
+
     log.info("HiVo Configs v10 started")
     app.run_polling(drop_pending_updates=True)
 
+
 if __name__ == "__main__":
-    main()
+    # FIX: log the fatal exception explicitly before it propagates, so the
+    # workflow's restart loop (stdout) shows *why* the bot died instead of
+    # just a bare non-zero exit code.
+    try:
+        main()
+    except Exception:
+        log.exception("fatal — bot process crashing")
+        raise
