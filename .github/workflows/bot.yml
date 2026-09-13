@@ -41,14 +41,18 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
-          MAX_TO_TEST: "8000"
-          DEEP_LIMIT: "400"
-          TCP_TIMEOUT: "1.5"
-          TCP_WORKERS: "500"
-          DEEP_WORKERS: "60"
-          DEEP_TIMEOUT: "4"
-          SPEED_BYTES: "131072"
-          REFRESH_EVERY: "600"
+          MAX_TO_TEST: "10000"
+          QUICK_N: "3000"
+          DEEP_QUICK: "500"
+          DEEP_LIMIT: "800"
+          BATCH_SIZE: "1000"
+          WAVE: "100"
+          TCP_TIMEOUT: "2.5"
+          TCP_WORKERS: "400"
+          DEEP_WORKERS: "50"
+          DEEP_TIMEOUT: "6"
+          SPEED_BYTES: "262144"
+          REFRESH_EVERY: "1800"
         run: |
           end=$((SECONDS + 330*60))
           n=0
