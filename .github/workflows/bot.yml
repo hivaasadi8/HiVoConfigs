@@ -41,8 +41,14 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
-          MAX_TO_TEST: "4000"
-          DEEP_LIMIT: "150"
+          MAX_TO_TEST: "8000"
+          DEEP_LIMIT: "400"
+          TCP_TIMEOUT: "1.5"
+          TCP_WORKERS: "500"
+          DEEP_WORKERS: "60"
+          DEEP_TIMEOUT: "4"
+          SPEED_BYTES: "131072"
+          REFRESH_EVERY: "600"
         run: |
           end=$((SECONDS + 330*60))
           n=0
@@ -53,9 +59,9 @@ jobs:
             timeout "$remain" python main.py
             code=$?
             if [ $code -eq 124 ]; then
-              echo "⏰ time budget reached — exiting cleanly"
+              echo "time budget reached — exiting"
               break
             fi
-            echo "⚠️ exited with code $code — restart in 5s"
+            echo "exited with code $code — restart in 5s"
             sleep 5
           done
