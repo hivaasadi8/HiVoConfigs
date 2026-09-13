@@ -1,1 +1,84 @@
-<!-- HiVo index.html (FIXED) — key part: multi-source loader -->\n<script>\nconst SUB_URLS = [\n  './sub.txt',\n  'https://raw.githubusercontent.com/hivaasadi8/HiVoConfigs/main/sub.txt',\n  'https://cdn.jsdelivr.net/gh/hivaasadi8/HiVoConfigs@main/sub.txt'\n];\nasync function loadSubs(){\n  for (const u of SUB_URLS){\n    try{\n      const r = await fetch(u, {cache:'no-store'});\n      if(!r.ok) continue;\n      let t = (await r.text()).trim();\n      if(!t.includes('://')){ // maybe base64\n        try{ t = atob(t.replace(/\\s+/g,'')); }catch(e){}\n      }\n      const lines = t.split(/\\r?\\n/).filter(x=>/^(vless|vmess|trojan|ss):\\/\\//i.test(x.trim()));\n      if(lines.length) return lines;\n    }catch(e){}\n  }\n  throw new Error('sub.txt not reachable');\n}\n<\/script>\n<!-- + copy buttons, protocol chips, QR modal, search (see live demo above) -->\n<!-- Pages: Settings > Pages > Branch main / root -->\n
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HiVo Configs</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:20px;max-width:800px;margin:0 auto}
+  h1{font-size:1.4rem}
+  .sub-list{list-style:none;padding:0}
+  .sub-list li{background:#161b22;border:1px solid #30363d;padding:12px;border-radius:8px;margin-bottom:8px;word-break:break-all}
+  .proto{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75rem;margin-left:6px}
+  .vmess{background:#8957e5;color:#fff}
+  .vless{background:#1f6feb;color:#fff}
+  .trojan{background:#da3633;color:#fff}
+  .ss{background:#d29922;color:#000}
+  button{background:#238636;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;margin-right:6px}
+  #status{opacity:.7}
+  .line{margin-top:8px;font-size:.85rem;opacity:.75}
+</style>
+</head>
+<body>
+<h1>⚡️ HiVo Configs</h1>
+<p id="status">در حال بارگذاری…</p>
+<ul class="sub-list" id="list"></ul>
+
+<script>
+const SUB_URLS = [
+  './sub.txt',
+  'https://raw.githubusercontent.com/hivaasadi8/HiVoConfigs/main/sub.txt',
+  'https://cdn.jsdelivr.net/gh/hivaasadi8/HiVoConfigs@main/sub.txt'
+];
+
+function protoOf(u){
+  const m = u.match(/^([a-z]+):\/\//i);
+  return m ? m[1].toLowerCase() : 'other';
+}
+
+async function loadSubs(){
+  for (const u of SUB_URLS){
+    try{
+      const r = await fetch(u, {cache:'no-store'});
+      if(!r.ok) continue;
+      let t = (await r.text()).trim();
+      if(!t.includes('://')){
+        try{ t = atob(t.replace(/\s+/g,'')); }catch(e){}
+      }
+      const lines = t.split(/\r?\n/).map(x=>x.trim())
+        .filter(x=>/^(vless|vmess|trojan|ss|hysteria2?):\/\//i.test(x));
+      if(lines.length) return lines;
+    }catch(e){}
+  }
+  throw new Error('sub.txt در دسترس نیست');
+}
+
+function render(lines){
+  const list = document.getElementById('list');
+  const status = document.getElementById('status');
+  status.textContent = lines.length + ' کانفیگ فعال';
+  list.innerHTML = '';
+  lines.forEach((line,i)=>{
+    const p = protoOf(line);
+    const li = document.createElement('li');
+    const safe = line.substring(0,110).replace(/[<>]/g,'');
+    li.innerHTML =
+      '<span class="proto '+p+'">'+p.toUpperCase()+'</span>' +
+      '<span style="margin-right:8px;opacity:.6">#'+(i+1)+'</span>' +
+      '<button data-copy>کپی</button>' +
+      '<div class="line">'+safe+'…</div>';
+    li.querySelector('[data-copy]').onclick = () => {
+      navigator.clipboard.writeText(line);
+      event.target.textContent = '✓ شد';
+      setTimeout(()=>event.target.textContent='کپی',1200);
+    };
+    list.appendChild(li);
+  });
+}
+
+loadSubs().then(render).catch(e=>{
+  document.getElementById('status').textContent = '⚠️ ' + e.message;
+});
+</script>
+</body>
+</html>
