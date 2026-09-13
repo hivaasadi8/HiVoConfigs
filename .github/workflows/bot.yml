@@ -3,7 +3,9 @@ name: HiVo Auto-Update 🌐
 on:
   schedule:
     - cron: '*/45 * * * *'
+
   workflow_dispatch:
+
   push:
     branches:
       - main
@@ -25,22 +27,35 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: 📥 Checkout
+
+      # ─────────────────────────────
+      # Checkout
+      # ─────────────────────────────
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # ─────────────────────────────
+      # Python
+      # ─────────────────────────────
       - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
 
+      # ─────────────────────────────
+      # Dependencies
+      # ─────────────────────────────
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ─────────────────────────────
+      # Run tester
+      # ─────────────────────────────
       - name: 🧪 Run HiVo tester
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
@@ -52,71 +67,122 @@ jobs:
           python tester.py
 
           echo ""
-          echo "📊 Output check:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 Checking generated files"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+          # sub.txt MUST exist
           if [ ! -f sub.txt ]; then
             echo "❌ ERROR: sub.txt was not created."
             exit 1
           fi
 
+          # sub.txt MUST NOT be empty
           if [ ! -s sub.txt ]; then
             echo "❌ ERROR: sub.txt is empty."
             exit 1
           fi
 
-          echo "✅ sub.txt created successfully."
-          echo "📄 Lines: $(wc -l < sub.txt)"
+          SUB_LINES=$(grep -cve '^[[:space:]]*$' sub.txt || true)
 
+          echo "✅ sub.txt exists"
+          echo "📄 Config lines: $SUB_LINES"
+
+          if [ "$SUB_LINES" -eq 0 ]; then
+            echo "❌ ERROR: sub.txt contains no configs."
+            exit 1
+          fi
+
+          # Optional Base64 file
           if [ -f sub_base64.txt ]; then
-            echo "✅ sub_base64.txt exists."
+            echo "✅ sub_base64.txt found"
           else
-            echo "⚠️ WARNING: sub_base64.txt was not created."
+            echo "ℹ️ sub_base64.txt not generated — continuing."
           fi
 
+          # Optional cache
           if [ -f data/tester_cache.json ]; then
-            echo "✅ Tester cache exists."
+            echo "✅ tester cache found"
           else
-            echo "⚠️ WARNING: tester cache was not created."
+            echo "ℹ️ tester cache not generated."
           fi
 
-      - name: 🔍 Validate generated files
+      # ─────────────────────────────
+      # Validate subscription
+      # ─────────────────────────────
+      - name: 🔍 Validate subscription
         run: |
-          echo "Checking subscription content..."
-
           python - <<'PY'
           from pathlib import Path
 
-          sub = Path("sub.txt")
+          path = Path("sub.txt")
 
-          text = sub.read_text(encoding="utf-8", errors="ignore").strip()
+          if not path.exists():
+              raise SystemExit("❌ sub.txt does not exist")
+
+          text = path.read_text(
+              encoding="utf-8",
+              errors="ignore"
+          ).strip()
 
           if not text:
-              raise SystemExit("❌ sub.txt contains no usable data")
+              raise SystemExit("❌ sub.txt is empty")
 
-          lines = [x.strip() for x in text.splitlines() if x.strip()]
+          lines = [
+              line.strip()
+              for line in text.splitlines()
+              if line.strip()
+          ]
 
-          if len(lines) == 0:
-              raise SystemExit("❌ No valid subscription lines found")
+          print(f"✅ Valid subscription entries: {len(lines)}")
 
-          print(f"✅ Valid subscription lines: {len(lines)}")
+          # Basic sanity check:
+          # every generated line should at least contain a URI scheme.
+          valid = sum(
+              1 for line in lines
+              if "://" in line
+          )
+
+          print(f"🔗 URI-like entries: {valid}")
+
+          if valid == 0:
+              raise SystemExit(
+                  "❌ No valid config URI detected in sub.txt"
+              )
           PY
 
-      - name: 💾 Commit updated subscription
+      # ─────────────────────────────
+      # Commit & Push
+      # ─────────────────────────────
+      - name: 💾 Commit updated files
         run: |
           git config user.name "HiVo-Bot"
           git config user.email "bot@hivo.local"
 
-          git add -f \
-            sub.txt \
-            sub_base64.txt \
-            data/tester_cache.json
+          # Required output
+          git add -f sub.txt
 
+          # Optional output
+          if [ -f sub_base64.txt ]; then
+            git add -f sub_base64.txt
+          fi
+
+          # Cache
+          if [ -f data/tester_cache.json ]; then
+            git add -f data/tester_cache.json
+          fi
+
+          # Nothing changed
           if git diff --cached --quiet; then
             echo "ℹ️ No changes detected."
             exit 0
           fi
 
+          echo "📦 Changes detected:"
+          git diff --cached --stat
+
           git commit -m "⚡️ Update HiVo subscription [skip ci]"
+
           git push
 
-          echo "✅ Changes pushed successfully."
+          echo "✅ Update pushed successfully."
