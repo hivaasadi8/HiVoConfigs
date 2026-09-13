@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v7 — مینی‌اپ + اینلاین + QR + ری‌اکشن
+#  HiVo Configs v8 — TITAN
+#  تستر تکی · رأی · شانسی · فیلتر · سرعت واقعی
 # ══════════════════════════════════════════
 
-import asyncio, base64, html, io, json, logging, os, re, threading
+import asyncio, base64, hashlib, html, io, json, logging, os, re, threading
 from datetime import datetime
 from urllib.parse import quote
 
@@ -12,17 +13,13 @@ import qrcode
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
                       InlineQueryResultArticle, InputTextMessageContent,
                       MenuButtonWebApp, ReactionTypeEmoji, Update, WebAppInfo)
-try:
-    from telegram import CopyTextButton
-    HAS_COPY = True
-except ImportError:
-    HAS_COPY = False
 from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, InlineQueryHandler,
                           MessageHandler, filters)
 
-from tester import (S, LOCK, refresh_loop, retest_all, URI_RE)
+from tester import (S, LOCK, refresh_loop, retest_all, test_single,
+                    URI_RE, TESTABLE)
 from store import STORE
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -35,14 +32,16 @@ if REPO and "/" in REPO:
     APP_URL = f"https://{_o.lower()}.github.io/{_n}/"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("elite")
+log = logging.getLogger("hivo")
 
 FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 def fa(x):
     return str(x).translate(FA)
 
 ADMIN_STATE = {}
+PENDING = {}
 
+BANNER = "✦ ━━━━━━━━━━━━━━━━ ✦"
 TAGLINE = "「 آزادی، یک اتصال فاصله دارد 」"
 FILE_TAG = "「 این‌ها زنده‌اند؛ تو هم باش 」"
 PREMIUM_TAG = "「 چیزهای خاص، برای تو 」"
@@ -58,6 +57,17 @@ def quality(ms):
         return "🟩🟩🟨🟨⬜️"
     return "🟨🟨⬜️⬜️⬜️"
 
+def speed_bar(v):
+    if not v:
+        return "⬜️⬜️⬜️⬜️⬜️"
+    if v >= 2:
+        return "🟩🟩🟩🟩🟩"
+    if v >= 1:
+        return "🟩🟩🟩🟩🟨"
+    if v >= 0.4:
+        return "🟩🟩🟨🟨⬜️"
+    return "🟨⬜️⬜️⬜️⬜️"
+
 def fa_ago(dt):
     if not dt:
         return "—"
@@ -67,6 +77,9 @@ def fa_ago(dt):
     if s < 3600:
         return f"{fa(s // 60)} دقیقه پیش"
     return f"{fa(s // 3600)} ساعت پیش"
+
+def vhash_of(host):
+    return hashlib.md5(str(host).encode()).hexdigest()[:8]
 
 def register(update):
     u = update.effective_user
@@ -123,14 +136,43 @@ def qr_bytes(url):
     buf.seek(0)
     return buf
 
+def vote_kb(vhash):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👍 وصل شد", callback_data=f"vote:1:{vhash}"),
+         InlineKeyboardButton("👎 نشد", callback_data=f"vote:0:{vhash}")]])
+
+def card_text(c, title="🧪 نتیجه تست"):
+    loc = f"{c.get('flag', '🌐')} {c.get('country') or 'نامشخص'}"
+    if c.get("city"):
+        loc += f" | {c['city']}"
+    sp = f"🚀 <b>{fa(c['speed'])}MB/s</b> {speed_bar(c['speed'])}" if c.get("speed") else "🚀 <i>سرعت‌سنجی نشده</i>"
+    mark = "🟢 زنده است" if c.get("deep") else "🟡 پورت باز است (تونل تست نشد)"
+    return (f"{BANNER}\n"
+            f"  {title}\n"
+            f"{BANNER}\n\n"
+            f"{mark}\n"
+            f"🌍 {html.escape(loc)}\n"
+            f"⏱ <b>{fa(c['latency'])}ms</b> {quality(c['latency'])}\n"
+            f"{sp}\n\n"
+            f"「 این یکی نفس می‌کشد 」")
+
 def menu_text():
     wel = STORE.data["settings"].get("welcome", "").strip()
+    g = S["good"]
+    countries = len({c.get("country") for c in g if c.get("country")})
+    up, down = STORE.vote_totals()
     return "\n".join([
-        "⚡️ <b>HiVo Configs</b>",
+        BANNER,
+        "      ⚡️ <b>HiVo Configs</b>",
+        TAGLINE,
+        BANNER,
         "",
-        wel or TAGLINE,
+        wel or "「 کیفیت را حس کن، نه فقط ببین 」",
         "",
-        f"🟢 {fa(len(S['good']))} زنده",
+        f"🟢 زنده: <b>{fa(len(g))}</b>",
+        f"🚀 سرعت‌سنجی‌شده: <b>{fa(S.get('fast', 0))}</b>",
+        f"🌍 کشور: <b>{fa(countries)}</b>",
+        f"🗳 رأی کاربران: 👍 {fa(up)} · 👎 {fa(down)}",
         f"🔄 {fa_ago(S['last'])}",
         "",
         "「 یک عدد بفرست، بقیه‌اش با ما 」",
@@ -140,6 +182,11 @@ def main_menu(is_admin=False):
     rows = []
     if APP_URL:
         rows.append([InlineKeyboardButton("📱 اپ HiVo", web_app=WebAppInfo(url=APP_URL))])
+    rows.append([InlineKeyboardButton("⚡️ سریع‌ترین‌ها", callback_data="fast"),
+                 InlineKeyboardButton("🎲 شانسی", callback_data="rnd"),
+                 InlineKeyboardButton("🧪 تستر", callback_data="tester")])
+    rows.append([InlineKeyboardButton("🌍 کشورها", callback_data="cty"),
+                 InlineKeyboardButton("🔌 پروتکل‌ها", callback_data="prt")])
     rows.append([InlineKeyboardButton("👑 اختصاصی", callback_data="premium")])
     rows.append([InlineKeyboardButton("📄 ۵۰", callback_data="file:50"),
                  InlineKeyboardButton("📄 ۱۰۰", callback_data="file:100"),
@@ -149,8 +196,8 @@ def main_menu(is_admin=False):
     rows.append([InlineKeyboardButton("🔗 سابسکرایبشن", callback_data="sub"),
                  InlineKeyboardButton("📱 QR", callback_data="qr")])
     rows.append([InlineKeyboardButton("📊 آمار", callback_data="stats"),
-                 InlineKeyboardButton("ℹ️ راهنما", callback_data="help")])
-    rows.append([InlineKeyboardButton("♻️ تست مجدد", callback_data="retest")])
+                 InlineKeyboardButton("ℹ️ راهنما", callback_data="help"),
+                 InlineKeyboardButton("♻️ تست مجدد", callback_data="retest")])
     if is_admin:
         rows.append([InlineKeyboardButton("👑 پنل ادمین", callback_data="adm")])
     return InlineKeyboardMarkup(rows)
@@ -158,20 +205,24 @@ def main_menu(is_admin=False):
 def stats_text():
     g = S["good"]
     rate = f"{fa(round(len(g) * 100 / S['tested']))}٪" if S["tested"] else "—"
-    sub = "✅ فعال" if S["sub"] else "—"
+    sub = "✅ فعال" if S.get("sub") else "—"
+    up, down = STORE.vote_totals()
     top = "\n".join(
-        f"  {fa(i)}. ⏱ {fa(c['latency'])}ms {quality(c['latency'])}"
+        f"  {fa(i)}. 🚀 {fa(c['speed'])}MB/s · ⏱ {fa(c['latency'])}ms"
         f"  <code>{html.escape(str(c['host']))}</code>"
-        for i, c in enumerate(g[:5], 1)) or "  —"
+        for i, c in enumerate([x for x in g if x.get("speed")][:5], 1)) or "  —"
     return (
         f"📊 <b>آمار</b> — {STATS_TAG}\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"📥 از ۱۲ منبع: <b>{fa(S['fetched'])}</b>\n"
+        f"📥 از ۱۷ منبع: <b>{fa(S['fetched'])}</b>\n"
         f"🔬 تست‌شده: <b>{fa(S['tested'])}</b>\n"
-        f"🟢 زنده: <b>{fa(len(g))}</b>\n"
+        f"🔌 زنده TCP: <b>{fa(S['tcp'])}</b>\n"
+        f"🟢 نهایی: <b>{fa(len(g))}</b>\n"
+        f"🚀 سرعت‌سنجی‌شده: <b>{fa(S.get('fast', 0))}</b>\n"
         f"📈 موفقیت: <b>{rate}</b>\n"
+        f"🗳 رأی‌ها: 👍 {fa(up)} · 👎 {fa(down)}\n"
         f"🔗 سابسکرایبشن: <b>{sub}</b>\n\n"
-        f"🏆 <b>برترین‌ها:</b>\n{top}\n\n"
+        f"🏆 <b>سریع‌ترین‌ها:</b>\n{top}\n\n"
         f"🔄 {fa_ago(S['last'])}")
 
 def help_text(is_admin=False):
@@ -180,10 +231,13 @@ def help_text(is_admin=False):
         "「 ساده مثل نفس کشیدن 」\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "🔢 عدد بفرست ← فایل می‌گیری\n"
+        "🧪 کانفیگ بفرست ← تست واقعی می‌گیری\n"
+        "⚡️ سریع‌ترین‌ها ← فقط سرعت‌سنجی‌شده‌ها\n"
+        "🎲 شانسی ← یه کانفیگ اتفاقی\n"
+        "🌍 کشورها / 🔌 پروتکل‌ها ← فیلتر\n"
         "📱 اپ HiVo ← تجربه کامل\n"
-        "🔍 توی هر چتی: <code>@ربات 10</code>\n"
         "🔗 سابسکرایبشن ← همیشه تازه\n"
-        "👑 اختصاصی ← چیزهای خاص\n\n"
+        "👍👎 به کانفیگ‌های تستی رأی بده\n\n"
         "「 هر کلید، دری را باز می‌کند 」")
     if is_admin:
         t += "\n\n👑 <b>ادمین:</b> /admin"
@@ -261,23 +315,30 @@ async def do_broadcast(ctx, text, status_msg):
     extra = f"\n❌ {fa(fail)}" if fail else ""
     await status_msg.edit_text(f"✅ رفت به {fa(ok)} نفر{extra}")
 
-async def send_config_file(message, n):
-    g = list(S["good"])
+def label_of(c):
+    sp = f" | 🚀 {fa(c['speed'])}" if c.get("speed") else ""
+    name = c.get("country") or ""
+    return f"{c.get('flag', '🌐')} {name} | {fa(c['latency'])}ms{sp}".strip()
+
+async def send_config_file(message, n=None, items=None, title=None):
+    g = list(S["good"]) if items is None else list(items)
     if not g:
         await message.reply_text("⏳ 「 چیزهای خوب، زمان می‌برند 」")
         return
-    items = g if (n is None or n >= len(g)) else g[:n]
+    its = g if (n is None or n >= len(g)) else g[:n]
     await message.chat.send_action("upload_document")
-    content = "\n".join(c["uri"] for c in items) + "\n"
+    content = "\n".join(c["uri"] for c in its) + "\n"
     buf = io.BytesIO(content.encode())
+    best = its[0]
+    sp = f" · 🚀 {fa(best['speed'])}MB/s" if best.get("speed") else ""
     caption = (
-        f"⚡️ <b>HiVo Configs — {fa(len(items))} زنده</b>\n"
+        f"⚡️ <b>{title or 'HiVo Configs'} — {fa(len(its))} زنده</b>\n"
         f"{FILE_TAG}\n"
-        f"⏱ بهترین: <b>{fa(items[0]['latency'])}ms</b> {quality(items[0]['latency'])}")
-    msg = await message.reply_document(document=buf, filename=f"HiVo-{len(items)}.txt",
+        f"⏱ بهترین: <b>{fa(best['latency'])}ms</b>{sp} {quality(best['latency'])}")
+    msg = await message.reply_document(document=buf, filename=f"HiVo-{len(its)}.txt",
                                        caption=caption, parse_mode=ParseMode.HTML)
     await react(msg)
-    STORE.add_totals(files=1, configs=len(items))
+    STORE.add_totals(files=1, configs=len(its))
 
 async def send_premium(message):
     prem = STORE.premium()
@@ -331,6 +392,20 @@ async def on_inline(update, ctx):
     await q.answer(results, cache_time=10, is_personal=True,
                    next_offset=str(offset + 12) if offset + 12 < len(g) else "")
 
+async def run_single_test(message, uri):
+    wait = await message.reply_html("🧪 <b>در حال اتصال واقعی…</b>\n「 صبر؛ داره نفس می‌کشه؟ 」")
+    res = await asyncio.get_running_loop().run_in_executor(None, test_single, uri.strip())
+    if res is None:
+        await wait.edit_text("☠️ <b>مُرده است</b>\n「 این یکی به آخر خط رسیده 」")
+        return
+    vh = vhash_of(res["host"])
+    PENDING[vh] = {"host": res["host"], "uri": res["uri"]}
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 کپی کانفیگ", copy_text=res["uri"])],
+        vote_kb(vh).inline_keyboard[0]])
+    await wait.edit_text(card_text(res), parse_mode=ParseMode.HTML, reply_markup=kb)
+    await react(message)
+  
 async def cmd_start(update, ctx):
     register(update)
     if not await gate(update, ctx):
@@ -379,12 +454,37 @@ async def cmd_stats(update, ctx):
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
     await update.message.reply_html(stats_text(), reply_markup=kb)
 
+def countries_kb():
+    cnt, flagmap = {}, {}
+    for c in S["good"]:
+        if c.get("country"):
+            cnt[c["country"]] = cnt.get(c["country"], 0) + 1
+            flagmap.setdefault(c["country"], c.get("flag", "🌐"))
+    top = sorted(cnt.items(), key=lambda kv: -kv[1])[:12]
+    rows = [[InlineKeyboardButton(f"{flagmap[n]} {n} ({fa(ct)})", callback_data=f"cty2:{n}")]
+            for n, ct in top]
+    rows.append([InlineKeyboardButton("🔙 منو", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
+def protocols_kb():
+    cnt = {}
+    for c in S["good"]:
+        p = c["uri"].split(":")[0].lower()
+        cnt[p] = cnt.get(p, 0) + 1
+    names = {"vmess": "🟣 VMess", "vless": "🔵 VLESS", "trojan": "🔴 Trojan",
+             "ss": "🟡 Shadowsocks", "hysteria": "🟠 Hysteria", "hysteria2": "🟠 Hysteria2"}
+    rows = [[InlineKeyboardButton(f"{names.get(p, p)} ({fa(ct)})",
+                                  callback_data=f"prt2:{p}")]
+            for p, ct in sorted(cnt.items(), key=lambda kv: -kv[1])]
+    rows.append([InlineKeyboardButton("🔙 منو", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
 async def on_text(update, ctx):
     register(update)
     uid = update.effective_user.id
+    txt = (update.message.text or "").strip()
     if STORE.is_admin(uid) and uid in ADMIN_STATE:
         state = ADMIN_STATE.pop(uid)
-        txt = (update.message.text or "").strip()
         if state == "premium":
             uris = URI_RE.findall(txt)
             if not uris:
@@ -417,15 +517,21 @@ async def on_text(update, ctx):
             status = await update.message.reply_text("📣 در راه‌اند…")
             await do_broadcast(ctx, txt, status)
         return
+    if "://" in txt:
+        if not await gate(update, ctx):
+            return
+        m = URI_RE.search(txt)
+        if m:
+            await run_single_test(update.message, m.group(0))
+            return
     if not await gate(update, ctx):
         return
-    m = re.search(r"\d+", update.message.text or "")
+    m = re.search(r"\d+", txt)
     if m:
         await send_config_file(update.message, int(m.group()))
     else:
         await cmd_start(update, ctx)
-      
-# ────────── دکمه‌ها ──────────
+
 async def on_button(update, ctx):
     register(update)
     q = update.callback_query
@@ -440,6 +546,17 @@ async def on_button(update, ctx):
             await q.message.reply_html(menu_text(), reply_markup=main_menu(is_admin))
         return
 
+    if data.startswith("vote:"):
+        ok = data.split(":")[1] == "1"
+        vh = data.split(":")[2]
+        host = PENDING.get(vh, {}).get("host") or STORE.get_vote_host(vh)
+        if host:
+            STORE.add_vote(vh, host, ok)
+            await q.answer("مرسی از رأیت! 🗳", show_alert=False)
+        else:
+            await q.answer("این رأی منقضی شده", show_alert=False)
+        return
+
     if data.startswith("file:"):
         if not await gate(update, ctx):
             return
@@ -451,6 +568,51 @@ async def on_button(update, ctx):
         await send_premium(q.message)
     elif data == "qr":
         await send_sub_qr(q.message)
+    elif data == "fast":
+        if not await gate(update, ctx):
+            return
+        fasts = [c for c in S["good"] if c.get("speed")][:50]
+        if fasts:
+            await send_config_file(q.message, items=fasts, title="⚡️ سریع‌ترین‌ها")
+        else:
+            await q.message.reply_html("⏳ 「 سرعت‌سنجی هنوز شروع نشده — چند دقیقه صبر 」")
+    elif data == "rnd":
+        if not await gate(update, ctx):
+            return
+        g = list(S["good"])
+        if not g:
+            await q.message.reply_html("⏳ 「 هنوز چیزی نیست 」")
+            return
+        c = random.choice(g)
+        vh = vhash_of(c["host"])
+        PENDING[vh] = {"host": c["host"], "uri": c["uri"]}
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 کپی کانفیگ", copy_text=c["uri"])],
+            vote_kb(vh).inline_keyboard[0],
+            [InlineKeyboardButton("🎲 یکی دیگه", callback_data="rnd")]])
+        await q.message.reply_html(card_text(c, "🎲 شانسی"), parse_mode=ParseMode.HTML, reply_markup=kb)
+    elif data == "tester":
+        await q.message.reply_html(
+            "🧪 <b>تستر تکی</b>\n\n"
+            "هر کانفیگی داری (vmess:// یا vless:// یا …) همین‌جا بفرست —\n"
+            "تونل واقعی + سرعت + کشور، همون لحظه.\n\n"
+            "「 محک بزن، اگر دوام آورد مال توئه 」")
+    elif data == "cty":
+        await q.message.reply_html("🌍 <b>یک کشور انتخاب کن</b>", reply_markup=countries_kb())
+    elif data.startswith("cty2:"):
+        if not await gate(update, ctx):
+            return
+        name = data.split(":", 1)[1]
+        items = [c for c in S["good"] if c.get("country") == name]
+        await send_config_file(q.message, items=items, title=f"{name}")
+    elif data == "prt":
+        await q.message.reply_html("🔌 <b>یک پروتکل انتخاب کن</b>", reply_markup=protocols_kb())
+    elif data.startswith("prt2:"):
+        if not await gate(update, ctx):
+            return
+        p = data.split(":", 1)[1]
+        items = [c for c in S["good"] if c["uri"].split(":")[0].lower() == p]
+        await send_config_file(q.message, items=items, title=f"🔌 {p.upper()}")
     elif data == "sub":
         url = S.get("sub")
         if url:
@@ -475,7 +637,8 @@ async def on_button(update, ctx):
         res = await asyncio.get_running_loop().run_in_executor(None, retest_all)
         with LOCK:
             if res:
-                S["good"], S["last"] = res, datetime.now()
+                from tester import publish
+                publish(res)
         best = f"{fa(res[0]['latency'])}ms" if res else "—"
         await q.edit_message_text(
             f"♻️ <b>تازه شد</b>\n🟢 {fa(len(res))} زنده\n⚡️ {best}",
@@ -520,7 +683,6 @@ async def on_button(update, ctx):
         STORE.set_setting("lock_on", not st.get("lock_on"))
         await q.edit_message_text(settings_text(), parse_mode=ParseMode.HTML, reply_markup=settings_kb())
 
-# ────────── شروع ──────────
 async def post_init(app):
     await app.bot.set_my_commands([
         BotCommand("start", "🏠 آغاز"),
@@ -529,7 +691,7 @@ async def post_init(app):
         BotCommand("help", "ℹ️ راهنما"),
     ])
     await app.bot.set_my_description(
-        "مرزها را نقاشی کردند؛ ما راهی ساختیم ⚡️ کانفیگ زنده، تست‌شده، بی‌محدودیت.")
+        "مرزها را نقاشی کردند؛ ما راهی ساختیم ⚡️ تست سرعت واقعی، تونل واقعی، رأی کاربران.")
     await app.bot.set_my_short_description(TAGLINE + " ⚡️")
     if APP_URL:
         try:
@@ -564,7 +726,7 @@ def main():
     app.add_handler(InlineQueryHandler(on_inline))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    log.info("HiVo Configs v7 started")
+    log.info("HiVo Configs v8 TITAN started")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
