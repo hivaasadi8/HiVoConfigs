@@ -1,1 +1,122 @@
-name: HiVo Auto-Update 🌐\n\non:\n  schedule:\n    - cron: '*/45 * * * *'\n  workflow_dispatch:\n  push:\n    branches: [main]\n    paths: ['tester.py','store.py','requirements.txt']\n\npermissions:\n  contents: write\n  pages: write\n\nconcurrency:\n  group: hivo-update\n  cancel-in-progress: true\n\njobs:\n  update-sub:\n    runs-on: ubuntu-latest\n    timeout-minutes: 35\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: '3.11'\n          cache: pip\n      - name: Install deps\n        run: |\n          python -m pip install --upgrade pip\n          pip install -r requirements.txt\n      - name: Run test cycle\n        env:\n          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}\n        run: |\n          mkdir -p data\n          python tester.py\n          echo '--- sub lines:'\n          wc -l sub.txt || echo 'sub.txt missing!'\n          test -s sub.txt || (echo 'ERROR: sub.txt empty' && exit 1)\n      - name: Commit sub\n        run: |\n          git config user.name 'HiVo-Bot'\n          git config user.email 'bot@hivo.local'\n          git add -f sub.txt sub_base64.txt data/tester_cache.json\n          git diff --staged --quiet || git commit -m '⚡️ update sub [skip ci]'\n          git push || echo 'nothing to push'\n
+name: HiVo Auto-Update 🌐
+
+on:
+  schedule:
+    - cron: '*/45 * * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tester.py'
+      - 'store.py'
+      - 'requirements.txt'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hivo-auto-update
+  cancel-in-progress: false
+
+jobs:
+  update-sub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🧪 Run HiVo tester
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          PYTHONUNBUFFERED: '1'
+        run: |
+          mkdir -p data
+
+          echo "🚀 Starting HiVo tester..."
+          python tester.py
+
+          echo ""
+          echo "📊 Output check:"
+
+          if [ ! -f sub.txt ]; then
+            echo "❌ ERROR: sub.txt was not created."
+            exit 1
+          fi
+
+          if [ ! -s sub.txt ]; then
+            echo "❌ ERROR: sub.txt is empty."
+            exit 1
+          fi
+
+          echo "✅ sub.txt created successfully."
+          echo "📄 Lines: $(wc -l < sub.txt)"
+
+          if [ -f sub_base64.txt ]; then
+            echo "✅ sub_base64.txt exists."
+          else
+            echo "⚠️ WARNING: sub_base64.txt was not created."
+          fi
+
+          if [ -f data/tester_cache.json ]; then
+            echo "✅ Tester cache exists."
+          else
+            echo "⚠️ WARNING: tester cache was not created."
+          fi
+
+      - name: 🔍 Validate generated files
+        run: |
+          echo "Checking subscription content..."
+
+          python - <<'PY'
+          from pathlib import Path
+
+          sub = Path("sub.txt")
+
+          text = sub.read_text(encoding="utf-8", errors="ignore").strip()
+
+          if not text:
+              raise SystemExit("❌ sub.txt contains no usable data")
+
+          lines = [x.strip() for x in text.splitlines() if x.strip()]
+
+          if len(lines) == 0:
+              raise SystemExit("❌ No valid subscription lines found")
+
+          print(f"✅ Valid subscription lines: {len(lines)}")
+          PY
+
+      - name: 💾 Commit updated subscription
+        run: |
+          git config user.name "HiVo-Bot"
+          git config user.email "bot@hivo.local"
+
+          git add -f \
+            sub.txt \
+            sub_base64.txt \
+            data/tester_cache.json
+
+          if git diff --cached --quiet; then
+            echo "ℹ️ No changes detected."
+            exit 0
+          fi
+
+          git commit -m "⚡️ Update HiVo subscription [skip ci]"
+          git push
+
+          echo "✅ Changes pushed successfully."
