@@ -10,7 +10,11 @@ permissions:
 
 concurrency:
   group: bot
-  cancel-in-progress: true
+  # FIX: was `true`. With `true`, every scheduled trigger instantly SIGKILLs
+  # a currently-running (and possibly perfectly healthy) bot process, causing
+  # a hard outage + lost in-memory state every ~6h. `false` makes a new
+  # scheduled run wait in queue until the current one finishes/times out.
+  cancel-in-progress: false
 
 jobs:
   bot:
@@ -18,11 +22,43 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip" # FIX: cache pip downloads between runs
+
       - run: pip install -r requirements.txt
-      - run: python main.py
+
+      # FIX: cache the extracted Xray binary so we don't re-download ~10MB
+      # and re-verify it from scratch on every single run.
+      - name: Cache Xray binary
+        uses: actions/cache@v4
+        with:
+          path: xray
+          key: xray-${{ runner.os }}-v24.12.18
+
+      # FIX: run inside a restart loop. Previously a single unhandled
+      # exception anywhere in main.py killed the whole job, and the bot
+      # then stayed offline until the *next* scheduled run (up to 6h later).
+      # Now it restarts within the same job as long as time remains.
+      - name: Run bot (auto-restart on crash)
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
+          ADMIN_ID: ${{ secrets.ADMIN_ID }}
+        run: |
+          end=$((SECONDS + 340*60))   # leave headroom under the 355min job timeout
+          n=0
+          while [ $SECONDS -lt $end ]; do
+            n=$((n+1))
+            echo "▶️  run #$n (elapsed ${SECONDS}s)"
+            python main.py
+            code=$?
+            if [ $code -eq 0 ]; then
+              echo "✅ exited cleanly (code 0) — stopping"
+              break
+            fi
+            echo "⚠️  bot crashed (exit code $code) — restarting in 5s"
+            sleep 5
+          done
