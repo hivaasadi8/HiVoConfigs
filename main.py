@@ -49,7 +49,6 @@ PREMIUM_TAG = "「 چیزهای خاص، برای تو 」"
 STATS_TAG = "「 اعداد دروغ نمی‌گویند 」"
 LOCK_TAG = "「 اول عضو شو، بعد برگرد 」"
 
-# ────────── ابزارها ──────────
 def quality(ms):
     if ms < 300:
         return "🟩🟩🟩🟩🟩"
@@ -124,7 +123,6 @@ def qr_bytes(url):
     buf.seek(0)
     return buf
 
-# ────────── منوها ──────────
 def menu_text():
     wel = STORE.data["settings"].get("welcome", "").strip()
     return "\n".join([
@@ -191,7 +189,6 @@ def help_text(is_admin=False):
         t += "\n\n👑 <b>ادمین:</b> /admin"
     return t
 
-# ────────── پنل ادمین ──────────
 def admin_panel_text():
     st = STORE.data["settings"]
     lock = f"🟢 {st.get('lock_channel', '')}" if st.get("lock_on") else "⚪️ خاموش"
@@ -264,7 +261,6 @@ async def do_broadcast(ctx, text, status_msg):
     extra = f"\n❌ {fa(fail)}" if fail else ""
     await status_msg.edit_text(f"✅ رفت به {fa(ok)} نفر{extra}")
 
-# ────────── ارسال ──────────
 async def send_config_file(message, n):
     g = list(S["good"])
     if not g:
@@ -310,7 +306,6 @@ async def send_sub_qr(message):
                                     parse_mode=ParseMode.HTML)
     await react(msg)
 
-# ────────── اینلاین ──────────
 async def on_inline(update, ctx):
     q = update.inline_query
     g = list(S["good"])
@@ -336,7 +331,6 @@ async def on_inline(update, ctx):
     await q.answer(results, cache_time=10, is_personal=True,
                    next_offset=str(offset + 12) if offset + 12 < len(g) else "")
 
-# ────────── دستورات ──────────
 async def cmd_start(update, ctx):
     register(update)
     if not await gate(update, ctx):
@@ -379,6 +373,11 @@ async def cmd_configs(update, ctx):
     if ctx.args and ctx.args[0].isdigit():
         n = int(ctx.args[0])
     await send_config_file(update.message, n)
+
+async def cmd_stats(update, ctx):
+    register(update)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
+    await update.message.reply_html(stats_text(), reply_markup=kb)
 
 async def on_text(update, ctx):
     register(update)
@@ -425,7 +424,7 @@ async def on_text(update, ctx):
         await send_config_file(update.message, int(m.group()))
     else:
         await cmd_start(update, ctx)
-
+      
 # ────────── دکمه‌ها ──────────
 async def on_button(update, ctx):
     register(update)
@@ -513,7 +512,8 @@ async def on_button(update, ctx):
         await q.message.reply_html(
             "✏️ <b>متن خوش‌آمد را بفرست</b>\n(کوتاه و از ته دل)\n\n/off برای پیش‌فرض — /cancel انصراف")
     elif data == "adm:chan" and is_admin:
-        ADMIN_STATE[uid] = "channel"        await q.message.reply_html(
+        ADMIN_STATE[uid] = "channel"
+        await q.message.reply_html(
             "📢 <b>آیدی کانال را بفرست</b> (با @)\nربات باید ادمین کانال باشد.\n\n/off برای خاموشی — /cancel انصراف")
     elif data == "adm:lock" and is_admin:
         st = STORE.data["settings"]
@@ -566,11 +566,6 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     log.info("HiVo Configs v7 started")
     app.run_polling(drop_pending_updates=True)
-
-async def cmd_stats(update, ctx):
-    register(update)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="menu")]])
-    await update.message.reply_html(stats_text(), reply_markup=kb)
 
 if __name__ == "__main__":
     main()
