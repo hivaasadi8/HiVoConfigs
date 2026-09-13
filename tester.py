@@ -38,7 +38,7 @@ FORCE = threading.Event()
 
 XRAY_BIN = None
 SRC_HEALTH = {}
-_HLOCK = threading.Lock()  # FIX: SRC_HEALTH is mutated from a thread-pool; guard it
+_HLOCK = threading.Lock()
 STAB = {}
 _SL = threading.Lock()
 GEO, _GLOCK = {}, threading.Lock()
@@ -47,24 +47,38 @@ CACHE, _CLOCK = {}, threading.Lock()
 URI_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2?)://[^\s\"'<>\\]+", re.IGNORECASE)
 TESTABLE = ("vmess", "vless", "trojan", "ss")
 
+# ── منابع گسترده (۳۰ منبع) ──
 DEFAULT_SOURCES = [
     "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/all.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vmess.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/trojan.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/ss.txt",
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
-    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
     "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt",
-    "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt",
-    "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/mix",
-    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
-    "https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2",
-    "https://raw.githubusercontent.com/freefq/free/master/v2",
-    "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
-    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
-    "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vmess",
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/trojan",
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/shadowsocks",
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
+    "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
+    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+    "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
+    "https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2",
+    "https://raw.githubusercontent.com/freefq/free/master/v2",
+    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
+    "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt",
+    "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/mix",
+    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/mix",
+    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/vless",
+    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/vmess",
+    "https://raw.githubusercontent.com/ts-sf/fly/main/v2",
+    "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix",
+    "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/vless",
+    "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/vmess",
+    "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/trojan",
+    "https://raw.githubusercontent.com/Kwinshadow/TelegramV2rayCollector/main/sublinks/mix.txt",
 ]
 
 
@@ -140,7 +154,7 @@ def current_sources():
 
 def fetch_source(url):
     r = requests.get(url, timeout=25, headers={"User-Agent": "HiVo-Configs/Pro"})
-    r.raise_for_status()  # FIX: was missing — silently accepted error pages as content
+    r.raise_for_status()
     text = r.text.strip()
     if "://" not in text:
         text = b64decode(text)
@@ -215,7 +229,6 @@ def tcp_probe(c):
 
 
 def _verify_xray_binary(path):
-    """Runs `xray version` and returns True if it looks like a real, working binary."""
     try:
         os.chmod(path, 0o755)
         out = subprocess.run([path, "version"], capture_output=True, text=True, timeout=10)
@@ -229,8 +242,6 @@ def ensure_xray():
     if XRAY_BIN and os.access(XRAY_BIN, os.X_OK):
         return True
 
-    # FIX: reuse a binary that's already sitting next to us (e.g. restored by
-    # actions/cache in CI) instead of unconditionally re-downloading every run.
     local = os.path.abspath("xray")
     if os.path.exists(local) and _verify_xray_binary(local):
         XRAY_BIN = local
@@ -416,7 +427,7 @@ def _socks_speed(port):
                 break
             total += len(chunk)
         dt = time.monotonic() - t0
-        if dt <= 0.05 or total < 100000:
+        if dt <= 0.05 or total < 30000:
             return None
         return round(total / dt / 1048576, 2)
     except Exception:
@@ -492,14 +503,6 @@ def deep_test(c):
     try:
         with open(path, "w") as f:
             json.dump(cfg, f)
-        # FIX: dropped `preexec_fn=_limits`. Calling resource.setrlimit() in a
-        # preexec_fn while the parent process is multi-threaded is a known
-        # fork()/thread deadlock hazard in CPython (locks held by other
-        # threads never get released in the child before exec()). With ~170
-        # worker threads running concurrently here, this could silently hang
-        # the whole engine over time. The 5s DEEP_TIMEOUT + _kill() below
-        # already bound how long any single xray process can run, so the
-        # rlimit safety net wasn't pulling its weight against that risk.
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", path],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
@@ -681,12 +684,6 @@ def upload_sub(text):
 def cycle(n_tcp, n_deep, label):
     uris = fetch_all()
     uniq = list(dict.fromkeys(uris))
-    # FIX: shuffle BEFORE capping to n_tcp, not after. Previously the shuffle
-    # happened only on the already-capped `parsed` list, so whichever sources
-    # happened to be first in `current_sources()` always won every single
-    # candidate slot and sources further down the list were never tested.
-    # Mix sources deterministically enough to avoid starving late sources, while
-    # preferring configs not seen successfully very recently.
     random.shuffle(uniq)
     with _CLOCK:
         cached_fps = set(CACHE.keys())
@@ -741,6 +738,14 @@ def refresh_loop():
             log.exception("sub")
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
+
+
+# ── تابع جدید برای فراخوانی از CI ──
+def run_cycle():
+    """یک دور تست کامل (برای فراخوانی از CI)."""
+    if not S.get("xray"):
+        S["xray"] = ensure_xray()
+    cycle(QUICK_N, DEEP_QUICK, "ci")
 
 
 def test_single(uri):
