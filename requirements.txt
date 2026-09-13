@@ -1,1 +1,4 @@
-# requirements.txt (FIXED)\npython-telegram-bot==21.6\nrequests==2.32.3\nqrcode==7.4.2\npillow==10.4.0\n\n# ── Procfile (new file, for Railway/Render) ──\n# worker: python main.py\n\n# ── Dockerfile (new file) ──\n# FROM python:3.11-slim\n# WORKDIR /app\n# COPY requirements.txt .\n# RUN pip install --no-cache-dir -r requirements.txt\n# COPY . .\n# CMD ["python", "main.py"]\n\n# ⚠️ BOT_TOKEN و ADMIN_ID را در هاست (Railway/Render) هم ست کن\n# Start command: python main.py\n
+python-telegram-bot>=22.0,<23
+requests>=2.32,<3
+PySocks>=1.7,<2
+qrcode[pil]>=8.0,<9

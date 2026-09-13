@@ -1,0 +1,1 @@
+Personal project. Review the licenses/terms of every external configuration source before production redistribution.

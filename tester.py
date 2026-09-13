@@ -1,162 +1,764 @@
 # -*- coding: utf-8 -*-
-# HiVo Configs — tester.py (FIXED)
-# run_cycle + refresh_loop (alias) + test_single + export_uri + current_sources
-import base64, json, logging, os, re, socket, time, urllib.parse, urllib.request
+# ══════════════════════════════════════════
+#  HiVo Configs v10 — Core Engine  (patched)
+# ══════════════════════════════════════════
+import base64, hashlib, json, logging, os, platform, random, re
+import socket, ssl, subprocess, threading, time, zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-import threading
+from urllib.parse import urlparse, parse_qs, unquote, urlsplit, quote
 
-log = logging.getLogger('hivo.tester')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+import requests
+import socks
+import signal
 
-CACHE_FILE='data/tester_cache.json'; SUB_FILE='sub.txt'; SUB_B64='sub_base64.txt'
-TOP_LIMIT=80; TCP_WORKERS=80; TCP_TIMEOUT=2.0
-URI_RE=re.compile(r'(?:vmess|vless|trojan|ss|hysteria2?)://[^\s"\'<>\\|]+', re.IGNORECASE)
+from store import STORE
 
-DEFAULT_SOURCES=[
- 'https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt',
- 'https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt',
- 'https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt',
- 'https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt',
- 'https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub',
- 'https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt',
+TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "3"))
+MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "12000"))
+QUICK_N, DEEP_QUICK, DEEP_LIMIT, WAVE = 1500, 120, 400, 60
+WORKERS = int(os.environ.get("TCP_WORKERS", "150"))
+DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "20"))
+DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "7"))
+SPEED_BYTES = int(os.environ.get("SPEED_BYTES", "524288"))
+REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "900"))
+SUB_LIMIT = int(os.environ.get("SUB_LIMIT", "500"))
+XRAY_VERSION = os.environ.get("XRAY_VERSION", "latest")
+XRAY_MIN_SIZE = int(os.environ.get("XRAY_MIN_SIZE", "5000000"))
+CACHE_TTL = int(os.environ.get("CACHE_TTL", "900"))
+MAX_CACHE = int(os.environ.get("MAX_CACHE", "10000"))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger("hivo.core")
+
+S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
+     "xray": False, "sub": None, "fast": 0}
+LOCK = threading.Lock()
+FORCE = threading.Event()
+
+XRAY_BIN = None
+SRC_HEALTH = {}
+_HLOCK = threading.Lock()  # FIX: SRC_HEALTH is mutated from a thread-pool; guard it
+STAB = {}
+_SL = threading.Lock()
+GEO, _GLOCK = {}, threading.Lock()
+CACHE, _CLOCK = {}, threading.Lock()
+
+URI_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2?)://[^\s\"'<>\\]+", re.IGNORECASE)
+TESTABLE = ("vmess", "vless", "trojan", "ss")
+
+DEFAULT_SOURCES = [
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/all.txt",
+    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
+    "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt",
+    "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt",
+    "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/mix",
+    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
+    "https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2",
+    "https://raw.githubusercontent.com/freefq/free/master/v2",
+    "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
+    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+    "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vmess",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/trojan",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/shadowsocks",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
 ]
 
-LOCK=threading.RLock(); FORCE=threading.Event()
-S={'all':[],'good':[],'sub':None,'last_run':None,'duration':0,'sources_count':0,'active_sources':0,'source_stats':{},'is_testing':False}
 
-def current_sources():
-    return list(DEFAULT_SOURCES)
+def b64decode(s):
+    s = s.strip().replace("-", "+").replace("_", "/")
+    s += "=" * (-len(s) % 4)
+    return base64.b64decode(s).decode("utf-8", "ignore")
 
-def _b64d(s):
-    s=s.replace('-','+').replace('_','/')
-    s+='='*(-len(s)%4)
-    return base64.b64decode(s).decode('utf-8','ignore')
 
 def parse_config(uri):
-    u=(uri or '').strip()
-    if not u: return None
+    """یک پاس: proto/host/port + fingerprint واقعی. تست‌ناپذیرها → None"""
     try:
-        low=u.lower()
-        if low.startswith('vmess://'):
-            d=json.loads(_b64d(u[8:].strip()))
-            host=(d.get('add') or d.get('host') or '').strip()
-            port=int(d.get('port') or 443)
-            if not host: return None
-            return {'proto':'vmess','host':host,'port':port,'uuid':d.get('id',''),'net':d.get('net') or 'tcp','tls':d.get('tls') or 'none','sni':d.get('sni') or host,'path':d.get('path') or '/','ps':d.get('ps') or '','raw':u}
-        if low.startswith('vless://') or low.startswith('trojan://'):
-            proto='vless' if low.startswith('vless') else 'trojan'
-            hi=u.find('#'); ps=urllib.parse.unquote(u[hi+1:]) if hi!=-1 else ''
-            p=urllib.parse.urlparse(u[:hi] if hi!=-1 else u)
-            q=urllib.parse.parse_qs(p.query)
-            g=lambda k,d='': q.get(k,[d])[0]
-            if not p.hostname: return None
-            return {'proto':proto,'host':p.hostname,'port':p.port or 443,'uuid':p.username or '','net':g('type','tcp'),'security':g('security','none' if proto=='vless' else 'tls'),'sni':g('sni',g('host',p.hostname)),'path':g('path','/'),'ps':ps,'raw':u}
-        if low.startswith('ss://'):
-            hi=u.find('#'); ps=urllib.parse.unquote(u[hi+1:]) if hi!=-1 else ''
-            body=(u[:hi] if hi!=-1 else u)[5:]
-            if '@' in body:
-                ui,sv=body.split('@',1)
-                try: ui=_b64d(ui)
-                except Exception: pass
-                host,port=(sv.split(':',1)+['8388'])[:2]
-                return {'proto':'ss','host':host,'port':int(port or 8388),'ps':ps,'raw':u}
-            try:
-                full=_b64d(body)
-                m=full.rsplit('@',1)
-                host,port=(m[1].split(':',1)+['8388'])[:2]
-                return {'proto':'ss','host':host,'port':int(port or 8388),'ps':ps,'raw':u}
-            except Exception: return None
+        low = uri.lower()
+        if low.startswith("vmess://"):
+            d = json.loads(b64decode(uri[8:]))
+            host = str(d.get("add", "")).strip()
+            port = int(d.get("port", 0))
+            if not host or not (0 < port < 65536):
+                return None
+            key = "|".join(("vmess", host.lower(), str(port),
+                             str(d.get("id", "")).lower(), str(d.get("net", "")).lower(),
+                             str(d.get("tls", "")).lower(), str(d.get("sni", "")).lower(),
+                             str(d.get("path", ""))))
+            return {"proto": "vmess", "host": host, "port": port,
+                    "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+
+        if low.startswith("ss://"):
+            body = uri[5:].split("#")[0]
+            if "@" in body:
+                userinfo, hostport = body.rsplit("@", 1)
+                if ":" not in userinfo:
+                    userinfo = b64decode(userinfo)
+                userinfo = unquote(userinfo)
+            else:
+                body = b64decode(body).split("/?")[0]
+                userinfo, hostport = body.rsplit("@", 1)
+            method, pwd = userinfo.split(":", 1)
+            hostport = hostport.split("?")[0]
+            host, port = hostport.rsplit(":", 1)
+            port = int(port)
+            host = host.strip("[]")
+            key = "|".join(("ss", host.lower(), str(port), userinfo))
+            return {"proto": "ss", "host": host, "port": port,
+                    "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+
+        if low.startswith(("vless://", "trojan://")):
+            p = urlsplit(uri)
+            if not p.hostname or not p.port:
+                return None
+            q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
+            proto = "vless" if low.startswith("vless") else "trojan"
+            if proto == "vless":
+                ident = unquote(p.username or "")
+            else:
+                ident = unquote(p.username or "") or q.get("password", "")
+            key = "|".join((proto, p.hostname.lower(), str(p.port), ident.lower(),
+                             q.get("type", "tcp").lower(), q.get("security", "").lower(),
+                             q.get("sni", q.get("host", "")).lower(), q.get("path", ""),
+                             q.get("pbk", "").lower(), q.get("flow", "").lower()))
+            return {"proto": proto, "host": p.hostname, "port": p.port,
+                    "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+        return None
+    except Exception:
+        return None
+
+
+def current_sources():
+    srcs = STORE.data.get("sources")
+    if isinstance(srcs, list) and srcs:
+        return list(srcs)
+    return list(DEFAULT_SOURCES)
+
+
+def fetch_source(url):
+    r = requests.get(url, timeout=25, headers={"User-Agent": "HiVo-Configs/Pro"})
+    r.raise_for_status()  # FIX: was missing — silently accepted error pages as content
+    text = r.text.strip()
+    if "://" not in text:
+        text = b64decode(text)
+    return URI_RE.findall(text)
+
+
+def _safe_fetch(url):
+    with _HLOCK:
+        h = SRC_HEALTH.setdefault(url, {"ok": 0, "fail": 0, "last_count": 0, "cooldown_until": 0})
+        cooling = h["cooldown_until"] > time.time()
+    if cooling:
+        return None
+    try:
+        res = fetch_source(url)
+        with _HLOCK:
+            h["ok"] += 1
+            h["fail"] = 0
+            h["last_count"] = len(res)
+        return res
     except Exception as e:
-        log.debug('parse fail: %s', e)
-    return None
+        with _HLOCK:
+            h["fail"] += 1
+            if h["fail"] >= 3:
+                h["cooldown_until"] = time.time() + 1800
+                log.warning(f"source cooldown: {url.rsplit('/', 1)[-1]}")
+        log.warning(f"src: {e}")
+        return None
 
-def export_uri(c):
-    return c.get('raw','')
 
-def _fetch(url, timeout=20):
-    for attempt in range(3):
-        try:
-            req=urllib.request.Request(url, headers={'User-Agent':'HiVo/11'})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                data=r.read().decode('utf-8','ignore')
-            # auto base64
-            if '://' not in data[:500]:
-                try:
-                    d=_b64d(data.strip().replace('\n','').replace('\r',''))
-                    if '://' in d: data=d
-                except Exception: pass
-            found=URI_RE.findall(data)
-            return found
-        except Exception as e:
-            log.warning('source fail (%d/3) %s : %s', attempt+1, url, e)
-            time.sleep(2)
-    return []
+def fetch_all():
+    out = []
+    with _HLOCK:
+        snapshot = {u: dict(h) for u, h in SRC_HEALTH.items()}
+    ordered = sorted(current_sources(),
+                      key=lambda u: (-(snapshot.get(u, {}).get("ok", 0)
+                                       if snapshot.get(u, {}).get("ok", 0) + snapshot.get(u, {}).get("fail", 0) else 0),
+                                     snapshot.get(u, {}).get("fail", 0)))
+    with ThreadPoolExecutor(6) as pool:
+        for res in pool.map(_safe_fetch, ordered):
+            if res:
+                out += res
+    return out
 
-def _tcp_ok(host, port, timeout=TCP_TIMEOUT):
+
+def source_report():
+    out = []
+    with _HLOCK:
+        snapshot = {u: dict(h) for u, h in SRC_HEALTH.items()}
+    for u in current_sources():
+        h = snapshot.get(u, {})
+        out.append({"url": u, "ok": h.get("ok", 0), "fail": h.get("fail", 0),
+                    "count": h.get("last_count", 0),
+                    "cooldown": max(0, int(h.get("cooldown_until", 0) - time.time()))})
+    return out
+
+
+def tcp_ping(host, port):
     try:
-        with socket.create_connection((host,int(port)), timeout=timeout):
-            return True
+        t0 = time.monotonic()
+        with socket.create_connection((host, port), timeout=TCP_TIMEOUT):
+            return round((time.monotonic() - t0) * 1000)
+    except Exception:
+        return None
+
+
+def tcp_probe(c):
+    ms = tcp_ping(c["host"], c["port"])
+    if ms is None:
+        return None
+    c["latency"] = ms
+    return c
+
+
+def _verify_xray_binary(path):
+    """Runs `xray version` and returns True if it looks like a real, working binary."""
+    try:
+        os.chmod(path, 0o755)
+        out = subprocess.run([path, "version"], capture_output=True, text=True, timeout=10)
+        return out.returncode == 0 and "Xray" in (out.stdout or "")
     except Exception:
         return False
 
-def _check(c):
-    t0=time.time()
-    ok=_tcp_ok(c['host'], c['port'])
-    lat=int((time.time()-t0)*1000)
-    if ok:
-        c['latency']=lat; c['ok']=True
-        return c
+
+def ensure_xray():
+    global XRAY_BIN
+    if XRAY_BIN and os.access(XRAY_BIN, os.X_OK):
+        return True
+
+    # FIX: reuse a binary that's already sitting next to us (e.g. restored by
+    # actions/cache in CI) instead of unconditionally re-downloading every run.
+    local = os.path.abspath("xray")
+    if os.path.exists(local) and _verify_xray_binary(local):
+        XRAY_BIN = local
+        log.info("xray: reused cached binary")
+        return True
+
+    arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
+    name = f"Xray-linux-{arch}.zip"
+    urls = []
+    if XRAY_VERSION and XRAY_VERSION != "latest":
+        urls.append(f"https://github.com/XTLS/Xray-core/releases/download/{XRAY_VERSION}/{name}")
+    try:
+        relr = requests.get("https://api.github.com/repos/XTLS/Xray-core/releases/latest",
+                            timeout=30, headers={"User-Agent": "HiVo-Configs"})
+        relr.raise_for_status()
+        rel = relr.json()
+        latest = next((a.get("browser_download_url") for a in rel.get("assets", [])
+                       if a.get("name") == name), None)
+        if latest and latest not in urls:
+            urls.append(latest)
+    except Exception as e:
+        log.warning(f"xray release lookup: {e}")
+
+    for url in urls:
+        try:
+            data = requests.get(url, timeout=240).content
+            if len(data) < XRAY_MIN_SIZE:
+                log.warning("xray zip too small — skipped")
+                continue
+            open("xray.zip", "wb").write(data)
+            with zipfile.ZipFile("xray.zip") as z:
+                z.extract("xray")
+            if not _verify_xray_binary(local):
+                log.warning("xray integrity check failed")
+                continue
+            XRAY_BIN = local
+            log.info(f"xray ready: {XRAY_VERSION}")
+            return True
+        except Exception as e:
+            log.warning(f"xray: {e}")
+    return False
+
+
+def _kill(proc):
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        return
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def build_stream(net, params, tls=False):
+    net = (net or "tcp").lower()
+    stream = {"network": net}
+    security = params.get("security", "") or ("tls" if tls else "")
+    if security in ("tls", "reality"):
+        stream["security"] = security
+        s = {"serverName": params.get("sni") or params.get("host") or "",
+             "fingerprint": params.get("fp", "chrome")}
+        if params.get("alpn"):
+            s["alpn"] = params["alpn"].split(",")
+        if security == "reality":
+            s["publicKey"] = params.get("pbk", "")
+            s["shortId"] = params.get("sid", "")
+        stream["realitySettings" if security == "reality" else "tlsSettings"] = s
+    if net == "ws":
+        ws = {"path": params.get("path", "/")}
+        if params.get("host"):
+            ws["headers"] = {"Host": params["host"]}
+        stream["wsSettings"] = ws
+    elif net == "grpc":
+        stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
+    elif net == "xhttp":
+        stream["xhttpSettings"] = {"path": params.get("path", "/"), "host": params.get("host", "")}
+    elif net == "httpupgrade":
+        stream["httpupgradeSettings"] = {"path": params.get("path", "/"), "host": params.get("host", "")}
+    elif net == "h2":
+        stream["httpSettings"] = {"path": params.get("path", "/"), "host": [params.get("host", "")]}
+    return stream
+
+
+def build_outbound(uri):
+    try:
+        low = uri.lower()
+        if low.startswith("vmess://"):
+            d = json.loads(b64decode(uri[8:]))
+            params = {"host": d.get("host", ""), "path": d.get("path", ""), "sni": d.get("sni", "")}
+            return {"protocol": "vmess",
+                    "settings": {"vnext": [{"address": d["add"], "port": int(d["port"]),
+                                             "users": [{"id": d["id"], "security": d.get("scy", "auto"), "level": 0}]}]},
+                    "streamSettings": build_stream(d.get("net", "tcp"), params, str(d.get("tls", "")).lower() == "tls")}
+
+        if low.startswith("vless://"):
+            p = urlsplit(uri)
+            q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
+            return {"protocol": "vless",
+                    "settings": {"vnext": [{"address": p.hostname, "port": p.port,
+                                             "users": [{"id": unquote(p.username or ""), "encryption": "none",
+                                                        "flow": q.get("flow", ""), "level": 0}]}]},
+                    "streamSettings": build_stream(q.get("type", "tcp"), q)}
+
+        if low.startswith("trojan://"):
+            p = urlsplit(uri)
+            q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
+            return {"protocol": "trojan",
+                    "settings": {"servers": [{"address": p.hostname, "port": p.port,
+                                               "password": unquote(p.username or q.get("password", "")), "level": 0}]},
+                    "streamSettings": build_stream(q.get("type", "tcp"), q, tls=True)}
+
+        if low.startswith("ss://"):
+            body = uri[5:].split("#")[0]
+            if "@" in body:
+                userinfo, hostport = body.rsplit("@", 1)
+                if ":" not in userinfo:
+                    userinfo = b64decode(userinfo)
+                userinfo = unquote(userinfo)
+            else:
+                body = b64decode(body).split("/?")[0]
+                userinfo, hostport = body.rsplit("@", 1)
+            method, pwd = userinfo.split(":", 1)
+            hostport = hostport.split("?")[0]
+            host, port = hostport.rsplit(":", 1)
+            return {"protocol": "shadowsocks",
+                    "settings": {"servers": [{"address": host.strip("[]"), "port": int(port),
+                                               "method": method, "password": pwd}]}}
+    except Exception:
+        return None
     return None
 
-def run_cycle():
-    t0=time.time()
-    with LOCK: S['is_testing']=True
-    log.info('HiVo test cycle started')
-    seen={}; allc=[]; stats={}
-    def job(url):
-        uris=_fetch(url)
-        return url, uris
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futs=[ex.submit(job,u) for u in DEFAULT_SOURCES]
-        for f in as_completed(futs):
-            url, uris=f.result()
-            ok=0
-            for u in uris:
-                c=parse_config(u)
-                if c and c['raw'] not in seen:
-                    seen[c['raw']]=1; allc.append(c); ok+=1
-            stats[url]=ok
-    goods=[]
-    with ThreadPoolExecutor(max_workers=TCP_WORKERS) as ex:
-        futs=[ex.submit(_check,c) for c in allc[:600]]
-        for f in as_completed(futs):
-            r=f.result()
-            if r: goods.append(r)
-    goods.sort(key=lambda c: c.get('latency',9999))
-    goods=goods[:TOP_LIMIT]
-    os.makedirs('data',exist_ok=True)
-    txt='\n'.join(export_uri(c) for c in goods)
-    open(SUB_FILE,'w',encoding='utf-8').write(txt+'\n' if txt else '')
-    open(SUB_B64,'w',encoding='utf-8').write(base64.b64encode(txt.encode()).decode() if txt else '')
-    json.dump({'good':goods,'at':datetime.now().isoformat()}, open(CACHE_FILE,'w',encoding='utf-8'), ensure_ascii=False)
-    dur=round(time.time()-t0,1)
-    with LOCK:
-        S.update({'all':allc,'good':goods,'sub':txt,'last_run':datetime.now().isoformat(),'duration':dur,'sources_count':len(DEFAULT_SOURCES),'active_sources':sum(1 for v in stats.values() if v>0),'source_stats':stats,'is_testing':False})
-    log.info('cycle done: %d good / %d all in %ss', len(goods), len(allc), dur)
-    return S
 
-# alias so BOTH imports work (this was the crash)
-refresh_loop=run_cycle
+def _free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def _socks_ok(port):
+    s = socks.socksocket()
+    s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
+    s.settimeout(5)
+    try:
+        s.connect(("www.gstatic.com", 80))
+        s.sendall(b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\n\r\n")
+        return b"204" in s.recv(64)
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _socks_speed(port):
+    raw = socks.socksocket()
+    raw.set_proxy(socks.SOCKS5, "127.0.0.1", port)
+    raw.settimeout(6)
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        raw.connect(("speed.cloudflare.com", 443))
+        s = ctx.wrap_socket(raw, server_hostname="speed.cloudflare.com")
+        s.sendall(f"GET /__down?bytes={SPEED_BYTES} HTTP/1.1\r\nHost: speed.cloudflare.com\r\nConnection: close\r\n\r\n".encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                return None
+            buf += chunk
+        head, _, rest = buf.partition(b"\r\n\r\n")
+        if b" 200 " not in head.split(b"\r\n")[0]:
+            return None
+        t0 = time.monotonic()
+        total = len(rest)
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+        dt = time.monotonic() - t0
+        if dt <= 0.05 or total < 100000:
+            return None
+        return round(total / dt / 1048576, 2)
+    except Exception:
+        return None
+    finally:
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+
+def _stab_update(fp, ok):
+    with _SL:
+        st = STAB.setdefault(fp, [0, 0])
+        st[0 if ok else 1] += 1
+
+
+def _stab_of(fp):
+    with _SL:
+        p, f = STAB.get(fp, [0, 0])
+        t = p + f
+        return round(p / t, 2) if t else 0.5
+
+
+def score_of(c):
+    s = 40.0
+    s += 25.0 * max(0.0, min(1.0, (2000.0 - c["latency"]) / 1900.0))
+    if c.get("speed"):
+        s += 25.0 * max(0.0, min(1.0, c["speed"] / 3.0))
+    s += 10.0 * (c["stability"] if c.get("stability") is not None else 0.5)
+    s += {"vless": 3, "trojan": 2, "vmess": 2, "ss": 1}.get(c.get("proto"), 0)
+    return int(max(0, min(100, round(s))))
+
+
+def _cache_get(fp):
+    now = time.time()
+    with _CLOCK:
+        item = CACHE.get(fp)
+        if not item:
+            return None
+        if now - item.get("at", 0) > CACHE_TTL:
+            CACHE.pop(fp, None)
+            return None
+        return dict(item.get("data", {}))
+
+
+def _cache_put(c):
+    with _CLOCK:
+        CACHE[c["fp"]] = {"at": time.time(), "data": dict(c)}
+        if len(CACHE) > MAX_CACHE:
+            for k, _ in sorted(CACHE.items(), key=lambda kv: kv[1].get("at", 0))[:len(CACHE) - MAX_CACHE]:
+                CACHE.pop(k, None)
+
+
+def deep_test(c):
+    if XRAY_BIN is None or c["proto"] not in TESTABLE:
+        return None
+    cached = _cache_get(c.get("fp", ""))
+    if cached and cached.get("deep"):
+        cached.update({k: c[k] for k in ("uri", "proto", "host", "port", "fp") if k in c})
+        return cached
+    out = build_outbound(c["uri"])
+    if out is None:
+        return None
+    port = _free_port()
+    path = f"/tmp/xt_{port}.json"
+    cfg = {"log": {"loglevel": "none"},
+           "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "socks",
+                         "settings": {"udp": False}}],
+           "outbounds": [out]}
+    ok = False
+    proc = None
+    try:
+        with open(path, "w") as f:
+            json.dump(cfg, f)
+        # FIX: dropped `preexec_fn=_limits`. Calling resource.setrlimit() in a
+        # preexec_fn while the parent process is multi-threaded is a known
+        # fork()/thread deadlock hazard in CPython (locks held by other
+        # threads never get released in the child before exec()). With ~170
+        # worker threads running concurrently here, this could silently hang
+        # the whole engine over time. The 5s DEEP_TIMEOUT + _kill() below
+        # already bound how long any single xray process can run, so the
+        # rlimit safety net wasn't pulling its weight against that risk.
+        proc = subprocess.Popen([XRAY_BIN, "run", "-c", path],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+        t0 = time.monotonic()
+        deadline = t0 + DEEP_TIMEOUT
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            try:
+                if _socks_ok(port):
+                    ms = round((time.monotonic() - t0) * 1000)
+                    speed = _socks_speed(port)
+                    _stab_update(c["fp"], True)
+                    res = {**c, "latency": ms, "speed": speed, "deep": True,
+                           "stability": _stab_of(c["fp"])}
+                    res["score"] = score_of(res)
+                    _cache_put(res)
+                    ok = True
+                    return res
+            except Exception:
+                time.sleep(0.3)
+        return None
+    except Exception:
+        return None
+    finally:
+        if proc is not None:
+            try:
+                _kill(proc)
+            except Exception:
+                pass
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        if not ok:
+            _stab_update(c["fp"], False)
+
+
+def flag_of(cc):
+    if not cc or len(cc) != 2:
+        return "🌐"
+    return "".join(chr(ord(c) + 127397) for c in cc.upper())
+
+
+def geo_batch(items):
+    todo = sorted({c["host"] for c in items if c.get("host") and c["host"] not in GEO})[:100]
+    for _ in range(2):
+        if not todo:
+            break
+        try:
+            r = requests.post("http://ip-api.com/batch?fields=status,country,countryCode,city,query",
+                               json=todo, timeout=12)
+            got = set()
+            for d in r.json():
+                if d.get("status") == "success":
+                    with _GLOCK:
+                        GEO[d["query"]] = (flag_of(d.get("countryCode")),
+                                           d.get("country", ""), d.get("city", ""))
+                    got.add(d["query"])
+            todo = [h for h in todo if h not in got]
+            break
+        except Exception:
+            time.sleep(1)
+    for c in items:
+        with _GLOCK:
+            f, n, city = GEO.get(c["host"], ("🌐", "", ""))
+        c["flag"], c["country"], c["city"] = f, n, city
+
+
+def export_uri(c):
+    name = f"HiVo ⭐{c.get('score', 0)}"
+    if c.get("flag"):
+        name += f" {c['flag']}"
+    if c.get("country"):
+        name += f" {c['country']}"
+    if c.get("city"):
+        name += f" | {c['city']}"
+    name += f" | {c['latency']}ms"
+    if c.get("speed"):
+        name += f" | {c['speed']}MBs"
+    uri = c["uri"]
+    if uri.lower().startswith("vmess://"):
+        try:
+            s = uri[8:].strip().replace("-", "+").replace("_", "/")
+            s += "=" * (-len(s) % 4)
+            d = json.loads(base64.b64decode(s).decode("utf-8", "ignore"))
+            d["ps"] = name
+            return "vmess://" + base64.b64encode(json.dumps(d, ensure_ascii=False).encode()).decode()
+        except Exception:
+            return uri
+    return uri.split("#", 1)[0] + "#" + quote(name, safe="")
+
+
+def _rank(c):
+    return (1 if c.get("deep") else 0, c.get("score", 0), -c.get("latency", 9999))
+
+
+def dedup(items):
+    best = {}
+    for c in items:
+        fp = c.get("fp")
+        if not fp:
+            continue
+        cur = best.get(fp)
+        if cur is None or _rank(c) > _rank(cur):
+            best[fp] = c
+    return list(best.values())
+
+
+def publish(alive):
+    alive = [c for c in dedup(alive) if c.get("deep")]
+    if not alive:
+        return
+    alive.sort(key=lambda c: (-c.get("score", 0), c["latency"], -c.get("speed", 0)))
+    with LOCK:
+        S["good"] = alive
+        S["fast"] = sum(1 for c in alive if c.get("speed"))
+        S["last"] = datetime.now()
+
+
+def publish_tcp(snap):
+    snap = dedup(snap)
+    with LOCK:
+        S["tcp"] = len(snap)
+
+
+def tcp_stage(cands, label):
+    tcp, done = [], 0
+    with ThreadPoolExecutor(WORKERS) as pool:
+        futs = [pool.submit(tcp_probe, c) for c in cands]
+        for fut in as_completed(futs):
+            r = fut.result()
+            if r:
+                tcp.append(r)
+            done += 1
+            if done % 500 == 0:
+                publish_tcp(tcp)
+    snap = dedup(tcp)
+    snap.sort(key=lambda c: c["latency"])
+    publish_tcp(snap)
+    return snap
+
+
+def deep_stage(cands, label, seed=None):
+    deep_all = list(seed or [])
+    for i in range(0, len(cands), WAVE):
+        wave = cands[i:i + WAVE]
+        with ThreadPoolExecutor(DEEP_WORKERS) as pool:
+            for r in pool.map(deep_test, wave):
+                if r:
+                    deep_all.append(r)
+        geo_batch(deep_all)
+        publish(dedup(deep_all))
+        log.info(f"[{label}] deep wave {i // WAVE + 1}: {len(deep_all)}")
+    return deep_all
+
+
+def upload_sub(text):
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not token or not repo:
+        return None
+    api = f"https://api.github.com/repos/{repo}/contents/sub.txt"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    try:
+        r = requests.get(api, headers=headers, timeout=30)
+        sha = r.json().get("sha") if r.status_code == 200 else None
+        body = {"message": "update sub", "content": base64.b64encode(text.encode()).decode()}
+        if sha:
+            body["sha"] = sha
+        r2 = requests.put(api, headers=headers, json=body, timeout=30)
+        if r2.status_code in (200, 201):
+            return f"https://raw.githubusercontent.com/{repo}/main/sub.txt"
+    except Exception as e:
+        log.warning(f"sub up: {e}")
+    return None
+
+
+def cycle(n_tcp, n_deep, label):
+    uris = fetch_all()
+    uniq = list(dict.fromkeys(uris))
+    # FIX: shuffle BEFORE capping to n_tcp, not after. Previously the shuffle
+    # happened only on the already-capped `parsed` list, so whichever sources
+    # happened to be first in `current_sources()` always won every single
+    # candidate slot and sources further down the list were never tested.
+    # Mix sources deterministically enough to avoid starving late sources, while
+    # preferring configs not seen successfully very recently.
+    random.shuffle(uniq)
+    with _CLOCK:
+        cached_fps = set(CACHE.keys())
+    if cached_fps:
+        uniq.sort(key=lambda u: 1 if (parse_config(u) or {}).get("fp") in cached_fps else 0)
+    with LOCK:
+        S["fetched"] = len(uniq)
+    seen, parsed = set(), []
+    for u in uniq:
+        if len(parsed) >= n_tcp:
+            break
+        c = parse_config(u)
+        if not c or c["fp"] in seen:
+            continue
+        seen.add(c["fp"])
+        c["uri"] = u
+        parsed.append(c)
+
+    with LOCK:
+        seed = list(S["good"])
+    log.info(f"[{label}] tcp candidates: {len(parsed)} (seed {len(seed)})")
+    snap = tcp_stage(parsed, label)
+    with LOCK:
+        S["tested"] = S.get("tested", 0) + len(parsed)
+    if S["xray"] and snap:
+        cands = snap[:n_deep]
+        log.info(f"[{label}] deep: {len(cands)}")
+        deep_stage(cands, label, seed=seed)
+
+
+def refresh_loop():
+    S["xray"] = ensure_xray()
+    log.info("engine v10 started")
+    first = True
+    while True:
+        try:
+            if first:
+                cycle(QUICK_N, DEEP_QUICK, "quick")
+                first = False
+            cycle(MAX_TO_TEST, DEEP_LIMIT, "full")
+        except Exception:
+            log.exception("cycle")
+        try:
+            with LOCK:
+                good = list(S["good"][:SUB_LIMIT])
+            if good:
+                sub_url = upload_sub("\n".join(export_uri(c) for c in good))
+                with LOCK:
+                    S["sub"] = sub_url
+                log.info(f"sub: {sub_url}")
+        except Exception:
+            log.exception("sub")
+        FORCE.wait(REFRESH_EVERY)
+        FORCE.clear()
+
 
 def test_single(uri):
-    c=parse_config(uri)
-    if not c: return {'ok':False,'msg':'فرمت کانفیگ معتبر نیست'}
-    r=_check(dict(c))
-    if r: return {'ok':True,'latency':r['latency'],'host':c['host']}
-    return {'ok':False,'msg':'پاسخی از سرور دریافت نشد (TCP timeout)'}
-
-if __name__=='__main__':
-    run_cycle()
-    print('Good:', len(S['good']))
-    
+    c = parse_config(uri)
+    if not c:
+        return None
+    c["uri"] = uri
+    ms = tcp_ping(c["host"], c["port"])
+    if ms is None:
+        return None
+    c["latency"] = ms
+    if S.get("xray"):
+        d = deep_test(c)
+        if d:
+            geo_batch([d])
+            return d
+    c["deep"] = False
+    c["speed"] = None
+    c["score"] = 0
+    geo_batch([c])
+    return c
