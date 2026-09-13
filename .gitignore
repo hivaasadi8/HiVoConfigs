@@ -4,3 +4,6 @@ __pycache__/
 venv/
 .venv/
 *.log
+xray
+xray.zip
+tester_cache.json
