@@ -1,64 +1,71 @@
-name: Telegram Bot
+name: HiVo Configs Auto-Tester & Bot
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: '*/45 * * * *'  # Runs every 45 minutes
   workflow_dispatch:
-
-permissions:
-  contents: write
+  push:
+    branches: [ main ]
+    paths:
+      - 'tester.py'
+      - 'main.py'
+      - 'store.py'
 
 concurrency:
-  group: bot
-  # FIX: was `true`. With `true`, every scheduled trigger instantly SIGKILLs
-  # a currently-running (and possibly perfectly healthy) bot process, causing
-  # a hard outage + lost in-memory state every ~6h. `false` makes a new
-  # scheduled run wait in queue until the current one finishes/times out.
-  cancel-in-progress: false
+  group: hivo-bot
+  cancel-in-progress: true
 
 jobs:
-  bot:
+  run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 40
+
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Checkout Code
+        uses: actions/checkout@v4
         with:
-          python-version: "3.11"
-          cache: "pip" # FIX: cache pip downloads between runs
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - run: pip install -r requirements.txt
-
-      # FIX: cache the extracted Xray binary so we don't re-download ~10MB
-      # and re-verify it from scratch on every single run.
-      - name: Cache Xray binary
-        uses: actions/cache@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          path: xray
-          key: xray-${{ runner.os }}-v24.12.18
+          python-version: '3.11'
+          cache: 'pip'
 
-      # FIX: run inside a restart loop. Previously a single unhandled
-      # exception anywhere in main.py killed the whole job, and the bot
-      # then stayed offline until the *next* scheduled run (up to 6h later).
-      # Now it restarts within the same job as long as time remains.
-      - name: Run bot (auto-restart on crash)
+      - name: Install System Utilities & Xray
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y curl unzip
+          mkdir -p /tmp/xray
+          curl -sL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray/xray.zip
+          unzip -qo /tmp/xray/xray.zip -d /tmp/xray
+          sudo mv /tmp/xray/xray /usr/local/bin/xray
+          sudo chmod +x /usr/local/bin/xray
+          sudo mkdir -p /usr/local/share/xray
+          [ -f /tmp/xray/geoip.dat ] && sudo mv /tmp/xray/geoip.dat /usr/local/share/xray/
+          [ -f /tmp/xray/geosite.dat ] && sudo mv /tmp/xray/geosite.dat /usr/local/share/xray/
+          xray version
+
+      - name: Install Python Requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Single Fast Test Cycle & Update Sub
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
         run: |
-          end=$((SECONDS + 340*60))   # leave headroom under the 355min job timeout
-          n=0
-          while [ $SECONDS -lt $end ]; do
-            n=$((n+1))
-            echo "▶️  run #$n (elapsed ${SECONDS}s)"
-            python main.py
-            code=$?
-            if [ $code -eq 0 ]; then
-              echo "✅ exited cleanly (code 0) — stopping"
-              break
-            fi
-            echo "⚠️  bot crashed (exit code $code) — restarting in 5s"
-            sleep 5
-          done
+          python -c '
+          from tester import run_cycle, S
+          run_cycle()
+          print("Cycle completed! Good configs:", len(S["good"]))
+          '
+
+      - name: Commit & Push sub.txt (Prevent Pages Build Loop)
+        run: |
+          git config --global user.name "HiVo-Bot"
+          git config --global user.email "bot@hivo.local"
+          git add sub.txt data/
+          git diff --staged --quiet || (git commit -m "update sub configs [skip ci]" && git push)
