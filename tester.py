@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v9 — موتور زنده
-#  انتشار تدریجی · سرعت واقعی · ضدتکرار
+#  HiVo Configs v10 — Core Engine
 # ══════════════════════════════════════════
 
-import base64, json, logging, os, platform, random, re, socket, ssl
-import subprocess, threading, time, zipfile
+import base64, hashlib, json, logging, os, platform, random, re
+import socket, ssl, subprocess, threading, time, zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, unquote, urlsplit, quote
@@ -13,7 +12,38 @@ from urllib.parse import urlparse, parse_qs, unquote, urlsplit, quote
 import requests
 import socks
 
-SOURCES = [
+try:
+    import resource
+except ImportError:
+    resource = None
+import signal
+
+from store import STORE
+
+TCP_TIMEOUT, MAX_TO_TEST = 3, 12000
+QUICK_N, DEEP_QUICK, DEEP_LIMIT, WAVE = 1500, 120, 400, 60
+WORKERS, DEEP_WORKERS, DEEP_TIMEOUT = 150, 20, 5
+SPEED_BYTES, REFRESH_EVERY, SUB_LIMIT = 524288, 900, 500
+XRAY_VERSION = "v24.12.18"
+XRAY_MIN_SIZE, XRAY_MEM = 5_000_000, 256 * 1024 * 1024
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger("hivo.core")
+
+S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
+     "xray": False, "sub": None, "fast": 0}
+LOCK = threading.Lock()
+FORCE = threading.Event()
+XRAY_BIN = None
+SRC_HEALTH = {}
+STAB = {}
+_SL = threading.Lock()
+GEO, _GLOCK = {}, threading.Lock()
+
+URI_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2?)://[^\s\"'<>\\]+", re.IGNORECASE)
+TESTABLE = ("vmess", "vless", "trojan", "ss")
+
+DEFAULT_SOURCES = [
     "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/all.txt",
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
@@ -33,36 +63,70 @@ SOURCES = [
     "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
 ]
 
-TCP_TIMEOUT   = 3
-MAX_TO_TEST   = 12000
-QUICK_N       = 2500    # دور اولِ سریع — نتیجه زیر ۲ دقیقه
-DEEP_QUICK    = 120     # تست عمیق دور اول
-DEEP_LIMIT    = 400     # تست عمیق دور کامل
-WAVE          = 60
-WORKERS       = 200
-DEEP_WORKERS  = 30
-DEEP_TIMEOUT  = 5
-SPEED_BYTES   = 524288
-REFRESH_EVERY = 900
-SUB_LIMIT     = 500
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("hivo.tester")
-
-S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
-     "xray": False, "sub": None, "fast": 0}
-LOCK = threading.Lock()
-FORCE = threading.Event()
-XRAY_BIN = None
-GEO, GEO_LOCK = {}, threading.Lock()
-
-URI_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2?)://[^\s\"'<>\\]+", re.IGNORECASE)
-TESTABLE = ("vmess", "vless", "trojan", "ss")
-
 def b64decode(s):
     s = s.strip().replace("-", "+").replace("_", "/")
     s += "=" * (-len(s) % 4)
     return base64.b64decode(s).decode("utf-8", "ignore")
+
+def parse_config(uri):
+    """یک پاس: proto/host/port + fingerprint واقعی. تست‌ناپذیرها → None"""
+    try:
+        low = uri.lower()
+        if low.startswith("vmess://"):
+            d = json.loads(b64decode(uri[8:]))
+            host = str(d.get("add", "")).strip()
+            port = int(d.get("port", 0))
+            if not host or not (0 < port < 65536):
+                return None
+            key = "|".join(("vmess", host.lower(), str(port),
+                            str(d.get("id", "")).lower(), str(d.get("net", "")).lower(),
+                            str(d.get("tls", "")).lower(), str(d.get("sni", "")).lower(),
+                            str(d.get("path", ""))))
+            return {"proto": "vmess", "host": host, "port": port,
+                    "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+        if low.startswith("ss://"):
+            body = uri[5:].split("#")[0]
+            if "@" in body:
+                userinfo, hostport = body.rsplit("@", 1)
+                if ":" not in userinfo:
+                    userinfo = b64decode(userinfo)
+                userinfo = unquote(userinfo)
+            else:
+                body = b64decode(body).split("/?")[0]
+                userinfo, hostport = body.rsplit("@", 1)
+            method, pwd = userinfo.split(":", 1)
+            hostport = hostport.split("?")[0]
+            host, port = hostport.rsplit(":", 1)
+            port = int(port)
+            host = host.strip("[]")
+            key = "|".join(("ss", host.lower(), str(port), userinfo))
+            return {"proto": "ss", "host": host, "port": port,
+                    "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+        if low.startswith(("vless://", "trojan://")):
+            p = urlsplit(uri)
+            if not p.hostname or not p.port:
+                return None
+            q = {k: v[0] for k, v in parse_qs(p.query, keep_blank_values=True).items()}
+            proto = "vless" if low.startswith("vless") else "trojan"
+            if proto == "vless":
+                ident = unquote(p.username or "")
+            else:
+                ident = unquote(p.username or "") or q.get("password", "")
+            key = "|".join((proto, p.hostname.lower(), str(p.port), ident.lower(),
+                            q.get("type", "tcp").lower(), q.get("security", "").lower(),
+                            q.get("sni", q.get("host", "")).lower(), q.get("path", ""),
+                            q.get("pbk", "").lower(), q.get("flow", "").lower()))
+            return {"proto": proto, "host": p.hostname, "port": p.port,
+                    "fp": hashlib.sha1(key.encode()).hexdigest()[:12]}
+        return None
+    except Exception:
+        return None
+
+def current_sources():
+    srcs = STORE.data.get("sources")
+    if isinstance(srcs, list) and srcs:
+        return list(srcs)
+    return list(DEFAULT_SOURCES)
 
 def fetch_source(url):
     text = requests.get(url, timeout=25).text.strip()
@@ -71,37 +135,43 @@ def fetch_source(url):
     return URI_RE.findall(text)
 
 def _safe_fetch(url):
+    h = SRC_HEALTH.setdefault(url, {"ok": 0, "fail": 0, "last_count": 0, "cooldown_until": 0})
+    if h["cooldown_until"] > time.time():
+        return None
     try:
-        return fetch_source(url)
+        res = fetch_source(url)
+        h["ok"] += 1
+        h["fail"] = 0
+        h["last_count"] = len(res)
+        return res
     except Exception as e:
+        h["fail"] += 1
+        if h["fail"] >= 3:
+            h["cooldown_until"] = time.time() + 1800
+            log.warning(f"source cooldown: {url.rsplit('/', 1)[-1]}")
         log.warning(f"src: {e}")
-        return []
+        return None
 
 def fetch_all():
     out = []
-    with ThreadPoolExecutor(8) as pool:
-        for res in pool.map(_safe_fetch, SOURCES):
-            out += res
+    ordered = sorted(current_sources(),
+                     key=lambda u: (-(SRC_HEALTH.get(u, {}).get("ok", 0)
+                                      if SRC_HEALTH.get(u, {}).get("ok", 0) + SRC_HEALTH.get(u, {}).get("fail", 0) else 0),
+                                    SRC_HEALTH.get(u, {}).get("fail", 0)))
+    with ThreadPoolExecutor(6) as pool:
+        for res in pool.map(_safe_fetch, ordered):
+            if res:
+                out += res
     return out
 
-def host_port(uri):
-    try:
-        low = uri.lower()
-        if low.startswith("vmess://"):
-            d = json.loads(b64decode(uri[8:]))
-            return str(d.get("add", "")).strip(), int(d.get("port", 0))
-        if low.startswith("ss://"):
-            rest = uri[5:].split("#")[0].split("/?")[0]
-            if "@" in rest:
-                rest = rest.split("@", 1)[1].split("?")[0]
-            else:
-                rest = b64decode(rest).rsplit("@", 1)[-1].split("?")[0]
-            host, port = rest.rsplit(":", 1)
-            return host.strip("[]"), int(port)
-        p = urlparse(uri)
-        return p.hostname, p.port
-    except Exception:
-        return None, None
+def source_report():
+    out = []
+    for u in current_sources():
+        h = SRC_HEALTH.get(u, {})
+        out.append({"url": u, "ok": h.get("ok", 0), "fail": h.get("fail", 0),
+                    "count": h.get("last_count", 0),
+                    "cooldown": max(0, int(h.get("cooldown_until", 0) - time.time()))})
+    return out
 
 def tcp_ping(host, port):
     try:
@@ -111,33 +181,72 @@ def tcp_ping(host, port):
     except Exception:
         return None
 
-def test_one(uri):
-    host, port = host_port(uri)
-    if not host or not port or not (0 < port < 65536):
+def tcp_probe(c):
+    ms = tcp_ping(c["host"], c["port"])
+    if ms is None:
         return None
-    ms = tcp_ping(host, port)
-    return {"uri": uri, "host": host, "port": port, "latency": ms} if ms else None
-
+    c["latency"] = ms
+    return c
+    
 def ensure_xray():
     global XRAY_BIN
+    if XRAY_BIN and os.access(XRAY_BIN, os.X_OK):
+        return True
     arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
     name = f"Xray-linux-{arch}.zip"
-    for _ in range(3):
+    urls = [f"https://github.com/XTLS/Xray-core/releases/download/{XRAY_VERSION}/{name}"]
+    try:
+        rel = requests.get("https://api.github.com/repos/XTLS/Xray-core/releases/latest",
+                           timeout=30, headers={"User-Agent": "hivo"}).json()
+        latest = next((a["browser_download_url"] for a in rel.get("assets", []) if a["name"] == name), None)
+        if latest:
+            urls.append(latest)
+    except Exception:
+        pass
+    for url in urls:
         try:
-            rel = requests.get("https://api.github.com/repos/XTLS/Xray-core/releases/latest",
-                               timeout=30, headers={"User-Agent": "hivo"}).json()
-            url = next(a["browser_download_url"] for a in rel["assets"] if a["name"] == name)
-            open("xray.zip", "wb").write(requests.get(url, timeout=180).content)
+            data = requests.get(url, timeout=240).content
+            if len(data) < XRAY_MIN_SIZE:
+                log.warning("xray zip too small — skipped")
+                continue
+            open("xray.zip", "wb").write(data)
             with zipfile.ZipFile("xray.zip") as z:
                 z.extract("xray")
             os.chmod("xray", 0o755)
+            out = subprocess.run([os.path.abspath("xray"), "version"],
+                                 capture_output=True, text=True, timeout=10)
+            if out.returncode != 0 or "Xray" not in (out.stdout or ""):
+                log.warning("xray integrity check failed")
+                continue
             XRAY_BIN = os.path.abspath("xray")
-            log.info("xray ready")
+            log.info(f"xray ready: {(out.stdout or '').splitlines()[0] if out.stdout else XRAY_VERSION}")
             return True
         except Exception as e:
-            log.warning(f"xray dl: {e}")
-            time.sleep(5)
+            log.warning(f"xray: {e}")
     return False
+
+def _limits():
+    if resource is None:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (XRAY_MEM, XRAY_MEM))
+    except Exception:
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (15, 15))
+    except Exception:
+        pass
+
+def _kill(proc):
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        return
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 def build_stream(net, params, tls=False):
     net = (net or "tcp").lower()
@@ -235,47 +344,66 @@ def _socks_ok(port):
             pass
 
 def _socks_speed(port):
-    s = socks.socksocket()
-    s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
-    s.settimeout(8)
+    raw = socks.socksocket()
+    raw.set_proxy(socks.SOCKS5, "127.0.0.1", port)
+    raw.settimeout(6)
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        s.connect(("speed.cloudflare.com", 443))
-        ss = ctx.wrap_socket(s, server_hostname="speed.cloudflare.com")
-        req = f"GET /__down?bytes={SPEED_BYTES} HTTP/1.1\r\nHost: speed.cloudflare.com\r\nConnection: close\r\n\r\n"
-        ss.sendall(req.encode())
-        total, t0, first = 0, time.monotonic(), b""
-        while b"\r\n\r\n" not in first:
-            chunk = ss.recv(4096)
+        raw.connect(("speed.cloudflare.com", 443))
+        s = ctx.wrap_socket(raw, server_hostname="speed.cloudflare.com")
+        s.sendall(f"GET /__down?bytes={SPEED_BYTES} HTTP/1.1\r\nHost: speed.cloudflare.com\r\nConnection: close\r\n\r\n".encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
             if not chunk:
                 return None
-            first += chunk
-        i = first.find(b"\r\n\r\n")
-        total += len(first) - i - 4
+            buf += chunk
+        head, _, rest = buf.partition(b"\r\n\r\n")
+        if b" 200 " not in head.split(b"\r\n")[0]:
+            return None
+        t0 = time.monotonic()
+        total = len(rest)
         while True:
-            chunk = ss.recv(65536)
+            chunk = s.recv(65536)
             if not chunk:
                 break
             total += len(chunk)
         dt = time.monotonic() - t0
-        if total > 50000 and dt > 0:
-            return round(total / dt / 1048576, 2)
+        if dt <= 0.05 or total < 100000:
+            return None
+        return round(total / dt / 1048576, 2)
     except Exception:
         return None
     finally:
         try:
-            s.close()
+            raw.close()
         except Exception:
             pass
-    return None
+
+def _stab_update(fp, ok):
+    with _SL:
+        st = STAB.setdefault(fp, [0, 0])
+        st[0 if ok else 1] += 1
+
+def _stab_of(fp):
+    with _SL:
+        p, f = STAB.get(fp, [0, 0])
+    t = p + f
+    return round(p / t, 2) if t else 0.5
+
+def score_of(c):
+    s = 40.0
+    s += 25.0 * max(0.0, min(1.0, (2000.0 - c["latency"]) / 1900.0))
+    if c.get("speed"):
+        s += 25.0 * max(0.0, min(1.0, c["speed"] / 3.0))
+    s += 10.0 * (c["stability"] if c.get("stability") is not None else 0.5)
+    s += {"vless": 3, "trojan": 2, "vmess": 2, "ss": 1}.get(c.get("proto"), 0)
+    return int(max(0, min(100, round(s))))
 
 def deep_test(c):
-    if XRAY_BIN is None:
-        return None
-    proto = c["uri"].lower().split(":")[0]
-    if proto not in TESTABLE:
+    if XRAY_BIN is None or c["proto"] not in TESTABLE:
         return None
     out = build_outbound(c["uri"])
     if out is None:
@@ -286,77 +414,89 @@ def deep_test(c):
            "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "socks",
                          "settings": {"udp": False}}],
            "outbounds": [out]}
+    ok = False
+    proc = None
     try:
         with open(path, "w") as f:
             json.dump(cfg, f)
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", path],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True, preexec_fn=_limits)
         t0 = time.monotonic()
         deadline = t0 + DEEP_TIMEOUT
-        try:
-            while time.monotonic() < deadline:
-                if proc.poll() is not None:
-                    break
-                try:
-                    if _socks_ok(port):
-                        ms = round((time.monotonic() - t0) * 1000)
-                        speed = _socks_speed(port)
-                        return {**c, "latency": ms, "speed": speed, "deep": True}
-                except Exception:
-                    time.sleep(0.3)
-            return None
-        finally:
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
             try:
-                proc.kill()
+                if _socks_ok(port):
+                    ms = round((time.monotonic() - t0) * 1000)
+                    speed = _socks_speed(port)
+                    _stab_update(c["fp"], True)
+                    res = {**c, "latency": ms, "speed": speed, "deep": True,
+                           "stability": _stab_of(c["fp"])}
+                    res["score"] = score_of(res)
+                    ok = True
+                    return res
             except Exception:
-                pass
+                time.sleep(0.3)
+        return None
     except Exception:
         return None
     finally:
+        if proc is not None:
+            try:
+                _kill(proc)
+            except Exception:
+                pass
         try:
             os.remove(path)
         except Exception:
             pass
-
+        if not ok:
+            _stab_update(c["fp"], False)
+            
 def flag_of(cc):
     if not cc or len(cc) != 2:
         return "🌐"
     return "".join(chr(ord(c) + 127397) for c in cc.upper())
 
 def geo_batch(items):
-    hosts = list({c["host"] for c in items})[:200]
-    todo = []
-    with GEO_LOCK:
-        for h in hosts:
-            if h not in GEO:
-                todo.append(h)
-    for i in range(0, len(todo), 100):
+    todo = sorted({c["host"] for c in items if c.get("host") and c["host"] not in GEO})[:100]
+    for _ in range(2):
+        if not todo:
+            break
         try:
             r = requests.post("http://ip-api.com/batch?fields=status,country,countryCode,city,query",
-                              json=todo[i:i + 100], timeout=15)
+                              json=todo, timeout=12)
+            got = set()
             for d in r.json():
                 if d.get("status") == "success":
-                    with GEO_LOCK:
-                        GEO[d["query"]] = (flag_of(d.get("countryCode")), d.get("country", ""), d.get("city", ""))
+                    with _GLOCK:
+                        GEO[d["query"]] = (flag_of(d.get("countryCode")),
+                                           d.get("country", ""), d.get("city", ""))
+                    got.add(d["query"])
+            todo = [h for h in todo if h not in got]
+            break
         except Exception:
-            continue
+            time.sleep(1)
     for c in items:
-        with GEO_LOCK:
-            f, name, city = GEO.get(c["host"], ("🌐", "", ""))
-        c["flag"], c["country"], c["city"] = f, name, city
+        with _GLOCK:
+            f, n, city = GEO.get(c["host"], ("🌐", "", ""))
+        c["flag"], c["country"], c["city"] = f, n, city
 
-def rename_uri(uri, c):
-    parts = ["HiVo Configs", c.get("flag", "🌐")]
+def export_uri(c):
+    name = f"HiVo ⭐{c.get('score', 0)}"
+    if c.get("flag"):
+        name += f" {c['flag']}"
     if c.get("country"):
-        parts.append(c["country"])
+        name += f" {c['country']}"
     if c.get("city"):
-        parts.append(c["city"])
-    parts.append(f"{c['latency']}ms")
+        name += f" | {c['city']}"
+    name += f" | {c['latency']}ms"
     if c.get("speed"):
-        parts.append(f"{c['speed']}MBs")
-    name = " | ".join(parts)
-    low = uri.lower()
-    if low.startswith("vmess://"):
+        name += f" | {c['speed']}MBs"
+    uri = c["uri"]
+    if uri.lower().startswith("vmess://"):
         try:
             s = uri[8:].strip().replace("-", "+").replace("_", "/")
             s += "=" * (-len(s) % 4)
@@ -367,63 +507,63 @@ def rename_uri(uri, c):
             return uri
     return uri.split("#", 1)[0] + "#" + quote(name, safe="")
 
-def dedup_hosts(items):
+def _rank(c):
+    return (1 if c.get("deep") else 0, c.get("score", 0), -c.get("latency", 9999))
+
+def dedup(items):
     best = {}
     for c in items:
-        h = c["host"]
-        if h not in best or c["latency"] < best[h]["latency"]:
-            best[h] = c
+        fp = c.get("fp")
+        if not fp:
+            continue
+        cur = best.get(fp)
+        if cur is None or _rank(c) > _rank(cur):
+            best[fp] = c
     return list(best.values())
 
 def publish(alive):
+    alive = [c for c in dedup(alive) if c.get("deep")]
     if not alive:
         return
-    alive = dedup_hosts(alive)
-    alive.sort(key=lambda c: (not c.get("deep"), -(c.get("speed") or 0), c["latency"]))
-    renamed = [{**c, "uri": rename_uri(c["uri"], c)} for c in alive]
+    alive.sort(key=lambda c: (-c.get("score", 0), c["latency"]))
     with LOCK:
-        S["good"] = renamed
+        S["good"] = alive
         S["fast"] = sum(1 for c in alive if c.get("speed"))
         S["last"] = datetime.now()
 
-def tcp_stage(uris, label):
+def publish_tcp(snap):
+    snap = dedup(snap)
+    with LOCK:
+        S["tcp"] = len(snap)
+
+def tcp_stage(cands, label):
     tcp, done = [], 0
     with ThreadPoolExecutor(WORKERS) as pool:
-        futs = {pool.submit(test_one, u) for u in uris}
+        futs = [pool.submit(tcp_probe, c) for c in cands]
         for fut in as_completed(futs):
             r = fut.result()
             if r:
                 tcp.append(r)
             done += 1
-            if done % 400 == 0 and tcp:
-                snap = dedup_hosts(tcp)
-                snap.sort(key=lambda c: c["latency"])
-                with LOCK:
-                    S["tcp"] = len(snap)
-                geo_batch(snap[:100])
-                publish(snap)
-                log.info(f"[{label}] tcp {done}: alive {len(snap)}")
-    snap = dedup_hosts(tcp)
+            if done % 500 == 0:
+                publish_tcp(tcp)
+    snap = dedup(tcp)
     snap.sort(key=lambda c: c["latency"])
-    with LOCK:
-        S["tcp"] = len(snap)
+    publish_tcp(snap)
     return snap
 
-def deep_stage(tcp_alive, limit, label):
-    cands = [c for c in tcp_alive if c["uri"].lower().split(":")[0] in TESTABLE][:limit]
-    deep_ok = []
-    old_deep = [c for c in tcp_alive if c.get("deep")]
-    base = [c for c in tcp_alive if not c.get("deep")][:150]
+def deep_stage(cands, label, seed=None):
+    deep_all = list(seed or [])
     for i in range(0, len(cands), WAVE):
         wave = cands[i:i + WAVE]
         with ThreadPoolExecutor(DEEP_WORKERS) as pool:
             for r in pool.map(deep_test, wave):
                 if r:
-                    deep_ok.append(r)
-        geo_batch(deep_ok)
-        publish(dedup_hosts(deep_ok + old_deep) + base)
-        log.info(f"[{label}] deep wave: {len(deep_ok)}")
-    return deep_ok
+                    deep_all.append(r)
+        geo_batch(deep_all)
+        publish(dedup(deep_all))
+        log.info(f"[{label}] deep wave {i // WAVE + 1}: {len(deep_all)}")
+    return deep_all
 
 def upload_sub(text):
     token = os.environ.get("GITHUB_TOKEN", "")
@@ -445,71 +585,74 @@ def upload_sub(text):
         log.warning(f"sub up: {e}")
     return None
 
-def cycle(n_quick, deep_quick, deep_limit, label):
-    uris = list(dict.fromkeys(fetch_all()))
-    random.shuffle(uris)
+def cycle(n_tcp, n_deep, label):
+    uris = fetch_all()
+    uniq = list(dict.fromkeys(uris))
     with LOCK:
-        S["fetched"] = len(uris)
-    log.info(f"[{label}] unique: {len(uris)}")
-    quick = uris[:n_quick]
-    snap = tcp_stage(quick, label)
+        S["fetched"] = len(uniq)
+    seen, parsed = set(), []
+    for u in uniq:
+        if len(parsed) >= n_tcp:
+            break
+        c = parse_config(u)
+        if not c or c["fp"] in seen:
+            continue
+        seen.add(c["fp"])
+        c["uri"] = u
+        parsed.append(c)
+    random.shuffle(parsed)
     with LOCK:
-        S["tested"] = S.get("tested", 0) + len(quick)
-    if snap:
-        deep_stage(snap, deep_quick, label)
-    rest = uris[n_quick:MAX_TO_TEST]
-    if rest:
-        snap2 = tcp_stage(rest, label + "-wide")
-        with LOCK:
-            S["tested"] = S.get("tested", 0) + len(rest)
-        merged = dedup_hosts(snap + snap2)
-        merged.sort(key=lambda c: c["latency"])
-        if merged and S["xray"]:
-            deep_stage(merged, deep_limit, label + "-wide")
+        seed = list(S["good"])
+    log.info(f"[{label}] tcp candidates: {len(parsed)} (seed {len(seed)})")
+    snap = tcp_stage(parsed, label)
+    with LOCK:
+        S["tested"] = S.get("tested", 0) + len(parsed)
+    if S["xray"] and snap:
+        cands = snap[:n_deep]
+        log.info(f"[{label}] deep: {len(cands)}")
+        deep_stage(cands, label, seed=seed)
 
 def refresh_loop():
     S["xray"] = ensure_xray()
-    log.info("engine v9 started")
+    log.info("engine v10 started")
     first = True
     while True:
         try:
             if first:
-                cycle(QUICK_N, DEEP_QUICK, DEEP_LIMIT, "quick")
+                cycle(QUICK_N, DEEP_QUICK, "quick")
                 first = False
-            else:
-                cycle(MAX_TO_TEST, DEEP_LIMIT, DEEP_LIMIT, "full")
-        except Exception as e:
-            log.exception(f"cycle: {e}")
+            cycle(MAX_TO_TEST, DEEP_LIMIT, "full")
+        except Exception:
+            log.exception("cycle")
         try:
             with LOCK:
-                good = S["good"][:SUB_LIMIT]
+                good = list(S["good"][:SUB_LIMIT])
             if good:
-                sub_url = upload_sub("\n".join(c["uri"] for c in good))
+                sub_url = upload_sub("\n".join(export_uri(c) for c in good))
                 with LOCK:
                     S["sub"] = sub_url
                 log.info(f"sub: {sub_url}")
-        except Exception as e:
-            log.warning(f"sub: {e}")
+        except Exception:
+            log.exception("sub")
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
 
 def test_single(uri):
-    """تستر تکی — حداکثر ~۱۵ ثانیه، همیشه جواب گویا"""
-    host, port = host_port(uri)
-    if not host or not port or not (0 < port < 65536):
+    c = parse_config(uri)
+    if not c:
         return None
-    c = {"uri": uri, "host": host, "port": port}
-    ms = tcp_ping(host, port)
+    c["uri"] = uri
+    ms = tcp_ping(c["host"], c["port"])
     if ms is None:
         return None
     c["latency"] = ms
-    proto = uri.lower().split(":")[0]
-    if S.get("xray") and proto in TESTABLE:
+    if S.get("xray"):
         d = deep_test(c)
         if d:
             geo_batch([d])
             return d
-    c["speed"] = None
     c["deep"] = False
+    c["speed"] = None
+    c["score"] = 0
     geo_batch([c])
     return c
