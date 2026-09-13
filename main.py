@@ -1,313 +1,127 @@
 # -*- coding: utf-8 -*-
-# ══════════════════════════════════════════════════════════════
-#  HiVo Configs v11 — LUXURY TELEGRAM BOT (Titan Edition)
-# ══════════════════════════════════════════════════════════════
-
-import asyncio
-import base64
-import html
-import io
-import json
-import logging
-import os
-import random
-import threading
-from datetime import datetime
-from urllib.parse import quote
-
+# HiVo Configs — main.py (FIXED)
+import html, io, logging, os, random
 import qrcode
-from telegram import (
-    BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InlineQueryResultArticle,
-    InputTextMessageContent,
-    MenuButtonWebApp,
-    Update,
-    WebAppInfo,
-)
-from telegram.constants import ChatAction, ParseMode
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    InlineQueryHandler,
-    MessageHandler,
-    filters,
-)
-
-from tester import (
-    S,
-    LOCK,
-    FORCE,
-    refresh_loop,
-    test_single,
-    parse_config,
-    export_uri,
-    current_sources,
-)
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
+from telegram.constants import ParseMode
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from tester import S, LOCK, test_single, parse_config, export_uri, current_sources
 from store import STORE
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-OWNER = os.environ.get("ADMIN_ID", "8343701928")
-REPO = os.environ.get("GITHUB_REPOSITORY", "")
-APP_URL = f"https://{REPO.split('/')[0]}.github.io/{REPO.split('/')[1]}/" if REPO and "/" in REPO else ""
+BOT_TOKEN=os.environ.get('BOT_TOKEN','')
+OWNER=str(os.environ.get('ADMIN_ID','8343701928'))
+REPO=os.environ.get('GITHUB_REPOSITORY','hivaasadi8/HiVoConfigs')
+APP_URL=f'https://{REPO.split("/")[0].lower()}.github.io/{REPO.split("/")[1]}/' if '/' in REPO else ''
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s: %(message)s")
-log = logging.getLogger("hivo.bot")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+log=logging.getLogger('hivo.bot')
+FA=str.maketrans('0123456789','۰۱۲۳۴۵۶۷۸۹')
+fa=lambda x: str(x).translate(FA)
 
-FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+def is_admin(uid): return str(uid)==OWNER or STORE.is_admin(str(uid))
 
-def fa(x):
-    return str(x).translate(FA)
+def card(c, badge='⚡️ کانفیگ ویژه'):
+    uri=export_uri(c)
+    proto=c.get('proto','vless').upper()
+    return (f'\U0001f60e {badge}\n━━━━━━\n'
+      f"📍 {c.get('ps') or c.get('host')}\n"
+      f'⚡️ {proto} | ⏱ {fa(c.get("latency",120))}ms\n━━━━━━\n'
+      f'📋 <b>برای کپی لمس کنید:</b>\n<code>{html.escape(uri)}</code>\n━━━━━━\n'
+      f'💡 v2rayNG • Streisand • Nekoray')
 
-STARTED = datetime.now()
-
-def uptime():
-    s = int((datetime.now() - STARTED).total_seconds())
-    h, rem = divmod(s, 3600)
-    return f"{fa(h)} ساعت و {fa(rem // 60)} دقیقه"
-
-def register(update: Update):
-    u = update.effective_user
-    if u:
-        STORE.touch(u.id, u.first_name or "", u.username or "")
-
-# ─── Luxury Telegram Message Formatter ────────────────────────
-def format_config_card(c: dict, badge: str = "⚡️ کانفیگ ویژه") -> str:
-    flag = c.get("flag", "🌐")
-    country = c.get("country", "آلمان")
-    proto = c.get("proto", "vless").upper()
-    ping = c.get("latency", 120)
-    net = c.get("net", "tcp").upper()
-    sec = (c.get("security") or c.get("tls") or "none").upper()
-    uri = export_uri(c)
-
-    return (
-        f"<b>{badge}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📍 <b>لوکیشن:</b> {flag} {country}\n"
-        f"⚡️ <b>پروتکل:</b> <code>{proto}</code> | <b>بستر:</b> <code>{net}</code>\n"
-        f"⏱ <b>پینگ تست‌شده:</b> <code>{fa(int(ping))} میلی‌ثانیه</code>\n"
-        f"🛡 <b>امنیت:</b> <code>{sec}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 <b>کانفیگ (برای کپی لمس کنید):</b>\n"
-        f"<code>{html.escape(uri)}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💡 <i>پشتیبانی در v2rayNG, Streisand, Sing-box, Nekoray</i>"
-    )
-
-def main_menu(is_admin=False):
-    rows = []
-    if APP_URL:
-        rows.append([InlineKeyboardButton("📱 اپلیکیشن لوکس HiVo (Mini App)", web_app=WebAppInfo(url=APP_URL))])
-
-    rows.append([
-        InlineKeyboardButton("⚡️ سریع‌ترین کانفیگ", callback_data="fast"),
-        InlineKeyboardButton("🎲 کانفیگ تصادفی", callback_data="rnd"),
-    ])
-    rows.append([
-        InlineKeyboardButton("📶 مناسب همراه اول", callback_data="op:mci"),
-        InlineKeyboardButton("📶 مناسب ایرانسل", callback_data="op:mtn"),
-    ])
-    rows.append([
-        InlineKeyboardButton("👑 سرورهای ضد فیلتر VIP", callback_data="reality"),
-        InlineKeyboardButton("🧪 تستر اتصال", callback_data="tester_menu"),
-    ])
-    rows.append([
-        InlineKeyboardButton("🔗 لینک سابسکرایب هوشمند", callback_data="sub_link"),
-        InlineKeyboardButton("📦 دریافت فایل ۵۰ تایی", callback_data="file:50"),
-    ])
-    rows.append([
-        InlineKeyboardButton("📊 وضعیت زنده سرورها", callback_data="stats"),
-    ])
-
-    if is_admin:
-        rows.append([InlineKeyboardButton("⚙️ پنل مدیریت ارشد", callback_data="admin:menu")])
-
+def menu(admin=False):
+    rows=[]
+    if APP_URL: rows.append([InlineKeyboardButton('📱 مینی‌اپ HiVo', web_app=WebAppInfo(url=APP_URL))])
+    rows+=([[InlineKeyboardButton('⚡️ سریع‌ترین',callback_data='fast'),InlineKeyboardButton('🎲 تصادفی',callback_data='rnd')],
+      [InlineKeyboardButton('📶 همراه اول',callback_data='op:mci'),InlineKeyboardButton('📶 ایرانسل',callback_data='op:mtn')],
+      [InlineKeyboardButton('👑 ضدفیلتر VIP',callback_data='reality'),InlineKeyboardButton('🧪 تستر',callback_data='tester_menu')],
+      [InlineKeyboardButton('🔗 ساب لینک',callback_data='sub_link'),InlineKeyboardButton('📦 فایل ۵۰تایی',callback_data='file:50')],
+      [InlineKeyboardButton('📊 وضعیت',callback_data='stats')]])
+    if admin: rows.append([InlineKeyboardButton('⚙️ پنل مدیریت',callback_data='admin:menu')])
     return InlineKeyboardMarkup(rows)
 
-# ─── Handlers ────────────────────────────────────────────────
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    register(update)
-    u = update.effective_user
-    uid = str(u.id)
-    is_admin = STORE.is_admin(uid) or uid == OWNER
+async def cmd_start(u,c):
+    user=u.effective_user
+    STORE.touch(user.id, user.first_name or '', user.username or '')
+    await u.message.reply_html(f'👋 درود {html.escape(user.first_name)} گرامی\nبه <b>HiVo Configs</b> خوش آمدید ⚡️\nسرویس را انتخاب کنید:', reply_markup=menu(is_admin(user.id)))
 
-    txt = (
-        f"👋 درود <b>{html.escape(u.first_name)}</b> گرامی،\n\n"
-        f"به سامانه فوق‌سریع <b>HiVo Configs</b> خوش آمدید.\n"
-        f"کانفیگ‌ها به صورت خودکار با هسته <b>Xray Core</b> غربالگری شده و پایدارترین اتصال را در اختیارتان قرار می‌دهند.\n\n"
-        f"🔹 <i>لطفاً سرویس مورد نیاز خود را انتخاب نمایید:</i>"
-    )
-    await update.message.reply_html(txt, reply_markup=main_menu(is_admin))
+async def cmd_sub(u,c):
+    link=f'https://raw.githubusercontent.com/{REPO}/main/sub.txt'
+    await u.message.reply_html(f'🔗 <b>لینک ساب:</b>\n<code>{html.escape(link)}</code>', reply_markup=menu(is_admin(u.effective_user.id)))
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    uid = str(update.effective_user.id)
-    is_admin = STORE.is_admin(uid) or uid == OWNER
+async def cmd_ping(u,c):
+    with LOCK: n=len(S.get('good',[]))
+    await u.message.reply_html(f'🏓 <b>آنلاینم!</b>\n🟢 {fa(n)} کانفیگ فعال')
 
-    with LOCK:
-        goods = list(S.get("good", []))
-
-    if data == "main_menu":
-        await q.edit_message_text(
-            "🏠 <b>منوی اصلی HiVo Configs</b>\n\nیک بخش را انتخاب کنید:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu(is_admin),
-        )
-        return
-
-    if data in ("fast", "rnd", "reality", "op:mci", "op:mtn"):
+async def on_cb(u,c):
+    q=u.callback_query; await q.answer(); d=q.data
+    uid=str(u.effective_user.id); admin=is_admin(uid)
+    with LOCK: goods=list(S.get('good',[]))
+    if d=='main_menu':
+        await q.edit_message_text('🏠 منوی اصلی:', reply_markup=menu(admin)); return
+    if d in ('fast','rnd','reality','op:mci','op:mtn'):
         if not goods:
-            await q.message.reply_html("⏳ <b>کانفیگ‌ها در حال به‌روزرسانی نهایی هستند...</b>\nچند ثانیه بعد مجدداً تلاش فرمایید.")
-            return
-
-        selected = None
-        badge = "⚡️ کانفیگ فوق‌سریع"
-
-        if data == "fast":
-            selected = goods[0]
-            badge = "⚡️ سریع‌ترین کانفیگ تست‌شده"
-        elif data == "reality":
-            realities = [c for c in goods if (c.get("security") == "reality" or "reality" in (c.get("raw") or ""))]
-            selected = realities[0] if realities else goods[0]
-            badge = "👑 کانفیگ VIP ضد فیلتر"
-        elif data == "op:mci":
-            selected = random.choice(goods[:10])
-            badge = "📶 سرور پایدار همراه اول"
-        elif data == "op:mtn":
-            selected = random.choice(goods[:10])
-            badge = "📶 سرور پایدار ایرانسل"
-        else:
-            selected = random.choice(goods[:25])
-            badge = "🎲 کانفیگ تست‌شده تصادفی"
-
-        txt = format_config_card(selected, badge)
-        uri = export_uri(selected)
-
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 دریافت بارکد QR", callback_data=f"qr:{selected['host']}:{selected['port']}")],
-            [InlineKeyboardButton("🎲 دریافت یکی دیگر", callback_data=data)],
-            [InlineKeyboardButton("🔙 بازگشت به منو", callback_data="main_menu")],
-        ])
-        await q.message.reply_html(txt, reply_markup=kb)
+            await q.message.reply_html('⏳ کانفیگ‌ها در حال به‌روزرسانی‌اند، ۱ دقیقه بعد تلاش کنید.'); return
+        badge={'fast':'⚡️ سریع‌ترین','rnd':'🎲 تصادفی','reality':'👑 VIP','op:mci':'📶 همراه اول','op:mtn':'📶 ایرانسل'}[d]
+        pool=goods
+        if d=='reality':
+            r=[x for x in goods if 'reality' in (x.get('raw') or '')]
+            pool=r or goods
+        pick=pool[0] if d in ('fast','reality') else random.choice(pool[:25])
+        idx=goods.index(pick)  # FIXED: index-based, no host:port split
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton('📱 QR',callback_data=f'qr:{idx}')],[InlineKeyboardButton('🎲 یکی دیگر',callback_data=d)],[InlineKeyboardButton('🔙 منو',callback_data='main_menu')]])
+        await q.message.reply_html(card(pick,badge), reply_markup=kb); return
+    if d.startswith('qr:'):
+        try:
+            idx=int(d.split(':')[1])
+            c=goods[idx]
+            qr=qrcode.QRCode(box_size=8,border=2); qr.add_data(export_uri(c)); qr.make(fit=True)
+            img=qr.make_image(fill_color='black',back_color='white')
+            bio=io.BytesIO(); img.save(bio,'PNG'); bio.seek(0)
+            await q.message.reply_photo(bio, caption='📱 اسکن در v2rayNG')
+        except Exception: await q.message.reply_html('❌ این کانفیگ منقضی شده، یکی دیگر بگیرید.')
         return
+    if d=='sub_link':
+        link=f'https://raw.githubusercontent.com/{REPO}/main/sub.txt'
+        await q.message.reply_html(f'🔗 ساب:\n<code>{html.escape(link)}</code>\n🔄 آپدیت هر ۴۵ دقیقه', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔙',callback_data='main_menu')]])); return
+    if d=='stats':
+        await q.message.reply_html(f"📊 🟢 {fa(len(goods))} کانفیگ فعال\n⏱ تست: {fa(S.get('duration',0))}s\n📚 سورس فعال: {fa(S.get('active_sources',0))}/{fa(S.get('sources_count',0))}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔙',callback_data='main_menu')]])); return
+    if d=='tester_menu':
+        await q.message.reply_html('🧪 کانفیگت را بفرست تا تست کنم (vless/vmess/trojan/ss)', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔙',callback_data='main_menu')]])); return
+    if d=='file:50':
+        if not goods: await q.message.reply_html('⏳ آماده نیست'); return
+        bio=io.BytesIO('\n'.join(export_uri(x) for x in goods[:50]).encode()); bio.name='HiVo_Top50.txt'
+        await q.message.reply_document(bio, caption='📦 ۵۰ کانفیگ برتر HiVo'); return
+    if d=='admin:menu':
+        if not admin: return
+        await q.message.reply_html(f"⚙️ پنل\n👥 کاربران: {fa(STORE.count())}\n📚 سورس‌ها:\n"+"\n".join('• '+s for s in current_sources()), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('🔙',callback_data='main_menu')]])); return
 
-    if data.startswith("qr:"):
-        _, host, port = data.split(":")
-        match = [c for c in goods if c.get("host") == host and str(c.get("port")) == port]
-        if match:
-            uri = export_uri(match[0])
-            qr = qrcode.QRCode(box_size=8, border=2)
-            qr.add_data(uri)
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-            bio = io.BytesIO()
-            img.save(bio, "PNG")
-            bio.seek(0)
-            await q.message.reply_photo(
-                photo=bio,
-                caption=f"📱 <b>بارکد QR کانفیگ</b>\nاسکن مستقیم در نرم‌افزارهای موبایل",
-                parse_mode=ParseMode.HTML,
-            )
-        return
+async def on_text(u,c):
+    t=(u.message.text or '').strip()
+    if t.lower().startswith(('vless://','vmess://','trojan://','ss://','hysteria')):
+        m=await u.message.reply_html('⏳ در حال تست…')
+        r=test_single(t)
+        if r.get('ok'): await m.edit_text(f"✅ سالم است! ⏱ {fa(r.get('latency',0))}ms", parse_mode=ParseMode.HTML)
+        else: await m.edit_text(f"❌ خراب است: {r.get('msg','')}", parse_mode=ParseMode.HTML)
 
-    if data == "sub_link":
-        sub_url = f"https://raw.githubusercontent.com/{REPO}/main/sub.txt" if REPO else "https://hivaasadi8.github.io/HiVoConfigs/sub.txt"
-        txt = (
-            f"🔗 <b>لینک هوشمند سابسکرایبشن</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"این لینک را در نرم‌افزار خود (v2rayNG, Streisand, Sing-box) به عنوان Subscription وارد کنید تا کانفیگ‌ها همیشه تازه و فعال باقی بمانند:\n\n"
-            f"<code>{sub_url}</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🔄 <i>به‌روزرسانی خودکار هر ۳۰ دقیقه</i>"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]])
-        await q.message.reply_html(txt, reply_markup=kb)
-        return
-
-    if data == "stats":
-        total_good = len(goods)
-        dur = S.get("duration", 0)
-        up = uptime()
-        txt = (
-            f"📊 <b>وضعیت زنده سامانه HiVo</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 <b>کانفیگ‌های فعال تست‌شده:</b> {fa(total_good)} عدد\n"
-            f"⚡️ <b>میانگین سرعت تست:</b> {fa(dur)} ثانیه\n"
-            f"⏳ <b>آپ‌تایم ربات:</b> {up}\n"
-            f"🛡 <b>موتور تست:</b> <code>Xray Core (In-Memory Engine)</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]])
-        await q.message.reply_html(txt, reply_markup=kb)
-        return
-
-    if data == "tester_menu":
-        txt = (
-            f"🧪 <b>تستر زنده کانفیگ</b>\n\n"
-            f"برای سنجش سلامت و پینگ، کافیست کانفیگ خود را (VLESS, VMess, Trojan, SS) به صورت متن به همین چت ارسال نمایید."
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]])
-        await q.message.reply_html(txt, reply_markup=kb)
-        return
-
-    if data == "file:50":
-        if not goods:
-            await q.message.reply_html("⏳ در حال آماده‌سازی فایل...")
-            return
-        content = "\n".join([export_uri(c) for c in goods[:50]])
-        bio = io.BytesIO(content.encode("utf-8"))
-        bio.name = "HiVo_Top50_Configs.txt"
-        await q.message.reply_document(
-            document=bio,
-            caption="📦 <b>فایل ۵۰ کانفیگ منتخب و با کیفیت HiVo</b>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
-    if any(text.lower().startswith(p) for p in ["vless://", "vmess://", "trojan://", "ss://", "hysteria2://"]):
-        msg = await update.message.reply_html("⏳ <b>در حال ارزیابی سلامت کانفیگ با موتور Xray...</b>")
-        res = test_single(text)
-        if res.get("ok"):
-            p = res.get("latency", 0)
-            flag = res.get("flag", "🌐")
-            country = res.get("country", "سرور فعال")
-            await msg.edit_text(
-                f"✅ <b>کانفیگ سالم و فعال است!</b>\n\n"
-                f"📍 <b>موقعیت:</b> {flag} {country}\n"
-                f"⏱ <b>پینگ اتصال:</b> <code>{fa(int(p))} ms</code>\n"
-                f"🛡 <b>پاسخ‌دهی موفقیت‌آمیز به شبکه</b>",
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await msg.edit_text(
-                f"❌ <b>کانفیگ غیرفعال است!</b>\n\nعلت: {res.get('msg', 'عدم دریافت پاسخ')}",
-                parse_mode=ParseMode.HTML,
-            )
+async def on_err(u,c): log.error('update error: %s', c.error)
+async def post_init(app):
+    await app.bot.set_my_commands([BotCommand('start','شروع'),BotCommand('sub','لینک ساب'),BotCommand('ping','تست ربات')])
 
 def main():
-    if not BOT_TOKEN:
-        log.error("BOT_TOKEN is not set. Exiting.")
-        return
-
-    # Start background testing loop
-    th = threading.Thread(target=refresh_loop, daemon=True)
-    th.start()
-
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_text))
-
-    log.info("HiVo Luxury Telegram Bot is running.")
+    if not BOT_TOKEN: log.error('BOT_TOKEN is not set'); return
+    from tester import refresh_loop
+    import threading
+    threading.Thread(target=refresh_loop, daemon=True).start()
+    app=Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler('start',cmd_start))
+    app.add_handler(CommandHandler('sub',cmd_sub))
+    app.add_handler(CommandHandler('ping',cmd_ping))
+    app.add_handler(CallbackQueryHandler(on_cb))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_error_handler(on_err)
+    log.info('HiVo bot running')
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
+if __name__=='__main__': main()
+    
