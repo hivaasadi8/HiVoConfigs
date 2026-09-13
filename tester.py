@@ -17,13 +17,12 @@ from store import STORE
 TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2.5"))
 MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "30000"))
 QUICK_N = int(os.environ.get("QUICK_N", "15000"))
-DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "600"))
-DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "600"))
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "500"))
-WAVE = int(os.environ.get("WAVE", "40"))
+DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "1500"))
+DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "1500"))
+WAVE = int(os.environ.get("WAVE", "50"))
 WORKERS = int(os.environ.get("TCP_WORKERS", "500"))
-DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "40"))
-DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "7"))
+DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "80"))
+DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "6"))
 SPEED_BYTES = int(os.environ.get("SPEED_BYTES", "131072"))
 REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "1800"))
 SUB_LIMIT = int(os.environ.get("SUB_LIMIT", "500"))
@@ -390,7 +389,7 @@ def _free_port():
 def _socks_ok(port):
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
-    s.settimeout(5)
+    s.settimeout(3)
     try:
         s.connect(("www.gstatic.com", 80))
         s.sendall(b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\n\r\n")
@@ -526,7 +525,7 @@ def deep_test(c):
                     ok = True
                     return res
             except Exception:
-                time.sleep(0.3)
+                time.sleep(0.2)
         return None
     except Exception:
         return None
@@ -632,35 +631,29 @@ def publish_tcp(snap):
         S["tcp"] = len(snap)
 
 
-def tcp_stage(cands, label):
-    tcp, done = [], 0
-    with ThreadPoolExecutor(WORKERS) as pool:
-        futs = [pool.submit(tcp_probe, c) for c in cands]
-        for fut in as_completed(futs):
-            r = fut.result()
-            if r:
-                tcp.append(r)
-            done += 1
-            if done % 500 == 0:
-                publish_tcp(tcp)
-    snap = dedup(tcp)
+def tcp_stage_all(cands, label):
+    """TCP test on ALL candidates at once, in chunks of 500 for progress."""
+    CHUNK = 500
+    total = len(cands)
+    survivors = []
+    for i in range(0, total, CHUNK):
+        chunk = cands[i:i + CHUNK]
+        chunk_res = []
+        with ThreadPoolExecutor(WORKERS) as pool:
+            futs = [pool.submit(tcp_probe, c) for c in chunk]
+            for fut in as_completed(futs):
+                r = fut.result()
+                if r:
+                    chunk_res.append(r)
+        survivors.extend(chunk_res)
+        with LOCK:
+            S["tested"] = i + len(chunk)
+            S["tcp"] = len(survivors)
+        log.info(f"[{label}] TCP {i+len(chunk)}/{total} tested | passed {len(survivors)}")
+    snap = dedup(survivors)
     snap.sort(key=lambda c: c["latency"])
     publish_tcp(snap)
     return snap
-
-
-def deep_stage(cands, label, seed=None):
-    deep_all = list(seed or [])
-    for i in range(0, len(cands), WAVE):
-        wave = cands[i:i + WAVE]
-        with ThreadPoolExecutor(DEEP_WORKERS) as pool:
-            for r in pool.map(deep_test, wave):
-                if r:
-                    deep_all.append(r)
-        geo_batch(deep_all)
-        publish(dedup(deep_all))
-        log.info(f"[{label}] deep wave {i // WAVE + 1}: alive {len(S['good'])}")
-    return deep_all
 
 
 def upload_sub(text):
@@ -684,7 +677,7 @@ def upload_sub(text):
     return None
 
 
-def _update_sub_now(label, batch_info=""):
+def _update_sub_now(label, info=""):
     try:
         with LOCK:
             good = list(S["good"][:SUB_LIMIT])
@@ -693,7 +686,7 @@ def _update_sub_now(label, batch_info=""):
         url = upload_sub("\n".join(export_uri(c) for c in good))
         with LOCK:
             S["sub"] = url
-        log.info(f"[{label}] {batch_info} sub updated → {len(good)} alive")
+        log.info(f"[{label}] {info} sub updated → {len(good)} alive")
     except Exception:
         log.exception("sub update")
 
@@ -708,6 +701,7 @@ def cycle(n_tcp, n_deep, label):
         uniq.sort(key=lambda u: 1 if (parse_config(u) or {}).get("fp") in cached_fps else 0)
     with LOCK:
         S["fetched"] = len(uniq)
+        S["tested"] = 0
 
     seen, parsed = set(), []
     for u in uniq:
@@ -723,37 +717,34 @@ def cycle(n_tcp, n_deep, label):
     with LOCK:
         seed = list(S["good"])
     total = len(parsed)
-    n_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
-    log.info(f"[{label}] total: {total} | seed: {len(seed)} | batches: {n_batches} | xray: {S['xray']}")
+    log.info(f"[{label}] total: {total} | seed: {len(seed)} | xray: {S['xray']}")
 
-    deep_all = list(seed)
-    processed = 0
+    # ── Phase 1: TCP test on ALL configs ──
+    log.info(f"[{label}] ═══ Phase 1: TCP test on all {total} ═══")
+    snap = tcp_stage_all(parsed, label)
+    log.info(f"[{label}] Phase 1 done: TCP passed {len(snap)}/{total}")
 
-    for i in range(0, total, BATCH_SIZE):
-        batch = parsed[i:i + BATCH_SIZE]
-        n_batch = i // BATCH_SIZE + 1
-        log.info(f"[{label}] ═══ batch {n_batch}/{n_batches} — TCP on {len(batch)} ═══")
-
-        snap = tcp_stage(batch, label)
-        with LOCK:
-            S["tested"] = S.get("tested", 0) + len(batch)
-        processed += len(batch)
-        log.info(f"[{label}] batch {n_batch}: TCP passed {len(snap)}/{len(batch)}")
-
-        if S["xray"] and snap:
-            cands = snap[:n_deep]
-            deep_all = deep_stage(cands, label, seed=deep_all)
+    # ── Phase 2: Deep test in waves, update sub after each wave ──
+    if S["xray"] and snap:
+        cands = snap[:n_deep]
+        n_waves = (len(cands) + WAVE - 1) // WAVE
+        log.info(f"[{label}] ═══ Phase 2: deep on {len(cands)} in {n_waves} waves of {WAVE} ═══")
+        deep_all = list(seed)
+        for i in range(0, len(cands), WAVE):
+            wave = cands[i:i + WAVE]
+            with ThreadPoolExecutor(DEEP_WORKERS) as pool:
+                for r in pool.map(deep_test, wave):
+                    if r:
+                        deep_all.append(r)
+            geo_batch(deep_all)
             publish(dedup(deep_all))
             with LOCK:
                 alive = len(S["good"])
-            log.info(f"[{label}] ✅ batch {n_batch}/{n_batches} DONE — tested {processed}/{total} — alive: {alive}")
-            _update_sub_now(label, f"batch {n_batch}/{n_batches}:")
-        else:
-            log.warning(f"[{label}] batch {n_batch}: xray={S['xray']} snap={len(snap)} — deep skipped")
-
-    with LOCK:
-        final_alive = len(S["good"])
-    log.info(f"[{label}] ✅✅ ALL done — final alive: {final_alive}")
+            log.info(f"[{label}] wave {i//WAVE + 1}/{n_waves}: alive {alive}")
+            _update_sub_now(label, f"wave {i//WAVE + 1}/{n_waves}:")
+        log.info(f"[{label}] Phase 2 done: final alive {len(S['good'])}")
+    else:
+        log.warning(f"[{label}] Phase 2 skipped: xray={S['xray']} snap={len(snap)}")
 
 
 def refresh_loop():
