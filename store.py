@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v8 — حافظه دائمی + رأی کاربران
+#  HiVo Configs v10 — Store
+#  Race-safe · Backend-swappable · Bounded
 # ══════════════════════════════════════════
 
 import base64, json, logging, os, threading, time
@@ -12,71 +13,112 @@ log = logging.getLogger("hivo.store")
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
-API = f"https://api.github.com/repos/{REPO}/contents/data/bot.json"
-HDRS = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/vnd.github+json"}
+
+MAX_USERS = 3000
+MAX_USER_VOTES = 300
+
+DEFAULTS = {
+    "users": {}, "admin": None,
+    "totals": {"files": 0, "configs": 0},
+    "premium": [], "votes": {}, "uvotes": {}, "sources": [],
+    "settings": {"lock_on": False, "lock_channel": "", "welcome": ""},
+}
 
 
-class Store:
+class GitHubJSONBackend:
+    """لایه ذخیره‌سازی — برای مهاجرت به SQLite/Postgres فقط همین کلاس عوض می‌شود."""
+
     def __init__(self):
-        self.data = {"users": {}, "admin": None,
-                     "totals": {"files": 0, "configs": 0},
-                     "premium": [], "votes": {},
-                     "settings": {"lock_on": False, "lock_channel": "", "welcome": ""}}
-        self._sha = None
-        self._dirty = False
-        self._lock = threading.Lock()
+        self.api = f"https://api.github.com/repos/{REPO}/contents/data/bot.json"
+        self.headers = {"Authorization": f"Bearer {TOKEN}",
+                        "Accept": "application/vnd.github+json"}
+
+    @property
+    def available(self):
+        return bool(REPO and TOKEN)
 
     def load(self):
-        if not REPO or not TOKEN:
-            log.warning("store: memory only")
+        r = requests.get(self.api, headers=self.headers, timeout=30)
+        if r.status_code != 200:
+            return None, None
+        j = r.json()
+        data = json.loads(base64.b64decode(j.get("content", "")).decode("utf-8", "ignore"))
+        return data, j.get("sha")
+
+    def save(self, data, sha):
+        content = base64.b64encode(json.dumps(data, ensure_ascii=False).encode()).decode()
+        payload = {"message": "update bot data", "content": content}
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(self.api, headers=self.headers, json=payload, timeout=30)
+        if r.status_code in (200, 201):
+            return r.json()["content"]["sha"]
+        if r.status_code == 409:
+            rr = requests.get(self.api, headers=self.headers, timeout=30)
+            if rr.status_code == 200:
+                payload["sha"] = rr.json().get("sha")
+                r = requests.put(self.api, headers=self.headers, json=payload, timeout=30)
+                if r.status_code in (200, 201):
+                    return r.json()["content"]["sha"]
+        return None
+
+
+def _copy(v):
+    return json.loads(json.dumps(v))
+    
+class Store:
+    """تمام عملیات دامنه زیر یک قفل — بدون Race Condition."""
+
+    def __init__(self):
+        self.backend = GitHubJSONBackend()
+        self.data = _copy(DEFAULTS)
+        self._sha = None
+        self._dirty = False
+        self._lock = threading.RLock()
+
+    def load(self):
+        if not self.backend.available:
+            log.warning("store: memory-only")
             return
         try:
-            r = requests.get(API, headers=HDRS, timeout=30)
-            if r.status_code == 200:
-                self._sha = r.json().get("sha")
-                d = json.loads(base64.b64decode(r.json().get("content", "")).decode("utf-8", "ignore"))
-                if isinstance(d, dict):
-                    self.data.update(d)
-                self.data.setdefault("users", {})
-                self.data.setdefault("premium", [])
-                self.data.setdefault("votes", {})
-                self.data.setdefault("totals", {"files": 0, "configs": 0})
-                self.data.setdefault("settings", {})
-                for k, v in {"lock_on": False, "lock_channel": "", "welcome": ""}.items():
-                    self.data["settings"].setdefault(k, v)
-                log.info(f"store: {len(self.data['users'])} users, {len(self.data['votes'])} votes")
+            data, sha = self.backend.load()
+            if isinstance(data, dict):
+                with self._lock:
+                    for k, v in DEFAULTS.items():
+                        if not isinstance(data.get(k), type(v)) or data.get(k) is None:
+                            data[k] = _copy(v)
+                    for k, v in DEFAULTS["settings"].items():
+                        data["settings"].setdefault(k, v)
+                    self.data = data
+                    self._sha = sha
+                log.info(f"store: {len(self.data['users'])} users, "
+                         f"{len(self.data['votes'])} vote-entries")
+            else:
+                log.info("store: fresh")
         except Exception as e:
             log.warning(f"store load: {e}")
 
     def save(self):
-        if not REPO or not TOKEN:
-            return False
-        content = base64.b64encode(json.dumps(self.data, ensure_ascii=False).encode()).decode()
-        payload = {"message": "update bot data", "content": content}
-        if self._sha:
-            payload["sha"] = self._sha
-        try:
-            r = requests.put(API, headers=HDRS, json=payload, timeout=30)
-            if r.status_code in (200, 201):
-                self._sha = r.json()["content"]["sha"]
-                with self._lock:
-                    self._dirty = False
-                return True
-            if r.status_code == 409:
-                rr = requests.get(API, headers=HDRS, timeout=30)
-                if rr.status_code == 200:
-                    self._sha = rr.json().get("sha")
-                    payload["sha"] = self._sha
-                    r = requests.put(API, headers=HDRS, json=payload, timeout=30)
-                    if r.status_code in (200, 201):
-                        self._sha = r.json()["content"]["sha"]
-                        with self._lock:
-                            self._dirty = False
-                        return True
-            log.warning(f"store save: {r.status_code}")
-        except Exception as e:
-            log.warning(f"store save: {e}")
+        with self._lock:
+            if not self.backend.available:
+                return False
+            snapshot = _copy(self.data)
+        sha = self.backend.save(snapshot, self._sha)
+        if sha:
+            with self._lock:
+                self._sha = sha
+                self._dirty = False
+            return True
+        log.warning("store save failed")
         return False
+
+    def autosave_loop(self):
+        while True:
+            time.sleep(180)
+            with self._lock:
+                dirty = self._dirty
+            if dirty:
+                log.info(f"autosave: {'ok' if self.save() else 'failed'}")
 
     def touch(self, user_id, first_name="", username=""):
         with self._lock:
@@ -90,6 +132,11 @@ class Store:
             u["last"] = datetime.now().isoformat(timespec="seconds")
             if self.data.get("admin") is None:
                 self.data["admin"] = str(user_id)
+            if len(self.data["users"]) > MAX_USERS:
+                old = sorted(self.data["users"].items(),
+                             key=lambda kv: kv[1].get("last") or "")
+                for uid, _ in old[:len(self.data["users"]) - MAX_USERS]:
+                    del self.data["users"][uid]
             self._dirty = True
 
     def set_admin(self, user_id):
@@ -98,10 +145,12 @@ class Store:
             self._dirty = True
 
     def is_admin(self, user_id):
-        return self.data.get("admin") == str(user_id)
+        with self._lock:
+            return self.data.get("admin") == str(user_id)
 
     def users(self):
-        return self.data.get("users", {})
+        with self._lock:
+            return _copy(self.data.get("users", {}))
 
     def add_totals(self, files=0, configs=0):
         with self._lock:
@@ -110,7 +159,8 @@ class Store:
             self._dirty = True
 
     def premium(self):
-        return self.data.get("premium", [])
+        with self._lock:
+            return list(self.data.get("premium", []))
 
     def add_premium(self, uris):
         with self._lock:
@@ -129,36 +179,71 @@ class Store:
             self._dirty = True
             return n
 
-    def add_vote(self, vhash, host, ok):
+    def vote(self, user_id, fhash, host, val):
+        """val: +1/-1 → 'added' | 'changed' | 'same' — هر کاربر یک رأی"""
         with self._lock:
-            v = self.data["votes"].setdefault(vhash, {"host": host, "up": 0, "down": 0})
-            if ok:
+            v = self.data["votes"].setdefault(fhash, {"host": host, "up": 0, "down": 0})
+            uv = self.data["uvotes"].setdefault(str(user_id), {})
+            prev = uv.get(fhash)
+            if prev == val:
+                return "same"
+            if prev == 1:
+                v["up"] = max(0, v["up"] - 1)
+            elif prev == -1:
+                v["down"] = max(0, v["down"] - 1)
+            uv[fhash] = val
+            if val == 1:
                 v["up"] += 1
             else:
                 v["down"] += 1
+            if len(uv) > MAX_USER_VOTES:
+                for k in list(uv.keys())[:-MAX_USER_VOTES]:
+                    del uv[k]
             self._dirty = True
+            return "changed" if prev is not None else "added"
 
-    def get_vote_host(self, vhash):
-        return self.data["votes"].get(vhash, {}).get("host")
+    def get_vote_host(self, fhash):
+        with self._lock:
+            v = self.data.get("votes", {}).get(fhash)
+            return v.get("host") if v else None
 
     def vote_totals(self):
-        up = sum(v.get("up", 0) for v in self.data["votes"].values())
-        down = sum(v.get("down", 0) for v in self.data["votes"].values())
+        with self._lock:
+            up = sum(v.get("up", 0) for v in self.data.get("votes", {}).values())
+            down = sum(v.get("down", 0) for v in self.data.get("votes", {}).values())
         return up, down
+
+    def sources(self):
+        with self._lock:
+            return list(self.data.get("sources", []))
+
+    def add_source(self, url):
+        with self._lock:
+            lst = self.data.setdefault("sources", [])
+            if url in lst:
+                return False
+            lst.append(url)
+            self._dirty = True
+            return True
+
+    def remove_source(self, url):
+        with self._lock:
+            lst = self.data.setdefault("sources", [])
+            if url in lst:
+                lst.remove(url)
+                self._dirty = True
+                return True
+            return False
+
+    def reset_sources(self):
+        with self._lock:
+            self.data["sources"] = []
+            self._dirty = True
 
     def set_setting(self, key, value):
         with self._lock:
             self.data["settings"][key] = value
             self._dirty = True
-
-    def autosave_loop(self):
-        while True:
-            time.sleep(180)
-            with self._lock:
-                dirty = self._dirty
-            if dirty:
-                ok = self.save()
-                log.info(f"autosave: {'ok' if ok else 'failed'}")
 
 
 STORE = Store()
