@@ -43,15 +43,16 @@ jobs:
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
           MAX_TO_TEST: "30000"
           QUICK_N: "15000"
-          DEEP_QUICK: "1500"
-          DEEP_LIMIT: "1500"
-          WAVE: "50"
-          TCP_TIMEOUT: "2.5"
-          TCP_WORKERS: "500"
-          DEEP_WORKERS: "80"
-          DEEP_TIMEOUT: "6"
+          DEEP_QUICK: "5000"
+          DEEP_LIMIT: "5000"
+          WAVE: "100"
+          TCP_TIMEOUT: "2"
+          TCP_WORKERS: "600"
+          DEEP_WORKERS: "100"
+          DEEP_TIMEOUT: "5"
           SPEED_BYTES: "131072"
-          REFRESH_EVERY: "1800"
+          CACHE_TTL: "86400"
+          REFRESH_EVERY: "60"
         run: |
           end=$((SECONDS + 330*60))
           n=0
