@@ -222,6 +222,7 @@ trojan://CF68213490@gentle-honeybee.rooster465.autos:443?security=tls#HiVo%20%E2
 trojan://AE62539071@teaching-gnu.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9080%20%F0%9F%8C%90%20%7C%20618ms
 trojan://ND91608427@pet-ghost.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9080%20%F0%9F%8C%90%20%7C%20622ms
 trojan://PD07395842@key-pony.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9080%20%F0%9F%8C%90%20%7C%20624ms
+trojan://ND91608427@exotic-chow.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9080%20%F0%9F%8C%90%20%7C%20625ms
 trojan://CF68213490@fair-werewolf.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9080%20%F0%9F%8C%90%20%7C%20633ms
 trojan://ND91608427@better-molly.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9080%20%F0%9F%8C%90%20%7C%20635ms
 trojan://PD07395842@certain-egret.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9080%20%F0%9F%8C%90%20%7C%20639ms
@@ -497,4 +498,3 @@ ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpXU3lMNFhUd05zZHY@108.181.121.226:8388#HiVo%2
 trojan://humanity@104.19.229.21:443?path=assignment&security=tls&insecure=0&type=ws&allowInsecure=0&sni=www.ignitelimit.com#HiVo%20%E2%AD%9073%20%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20Toronto%20%7C%20470ms%20%7C%200.05MBs
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpvWklvQTY5UTh5aGNRVjhrYTNQYTNB@193.29.139.151:8080#HiVo%20%E2%AD%9073%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20479ms%20%7C%200.29MBs
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprMWRCT21PQjRvcWk3VW1wMzdhMWJR@82.38.31.214:8080#HiVo%20%E2%AD%9073%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20487ms%20%7C%200.27MBs
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpvWklvQTY5UTh5aGNRVjhrYTNQYTNB@82.38.31.164:8080#HiVo%20%E2%AD%9073%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20492ms%20%7C%200.27MBs
