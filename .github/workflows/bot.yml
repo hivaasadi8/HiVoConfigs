@@ -1,71 +1,143 @@
-name: HiVo Bot
+# ══════════════════════════════════════════
+#  HiVo Configs — Auto-Tester & Bot
+#  Minimalist, Fast, Professional
+# ══════════════════════════════════════════
+name: HiVo Configs
+
+run-name: >-
+  ⚡ HiVo Configs — ${{ github.event_name == 'schedule' && 'Auto' || 'Manual' }} run
+  ${{ github.run_number }}
 
 on:
   schedule:
     - cron: "0 */6 * * *"
   workflow_dispatch:
+    inputs:
+      max_to_test:
+        description: "سقف کانفیگ برای تست TCP"
+        required: false
+        default: "30000"
+        type: choice
+        options: ["5000", "10000", "20000", "30000"]
+      quick_n:
+        description: "تعداد کانفیگ در دور اول (quick)"
+        required: false
+        default: "15000"
+        type: choice
+        options: ["3000", "8000", "15000", "20000"]
+      deep_limit:
+        description: "سقف کانفیگ برای تست تونل (deep)"
+        required: false
+        default: "1500"
+        type: choice
+        options: ["500", "1000", "1500", "2500"]
 
 permissions:
   contents: write
 
 concurrency:
-  group: hivo-bot
+  group: hivo-configs
   cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.11"
+  FORCE_COLOR: "1"
+  TERM: "xterm-256color"
 
 jobs:
   bot:
+    name: 🚀 Run Bot & Tester
     runs-on: ubuntu-latest
     timeout-minutes: 355
 
     steps:
-      - uses: actions/checkout@v4
+      # ── 1. Checkout ──
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      # ── 2. Python Setup ──
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
 
-      - name: Install Python deps
-        run: pip install -r requirements.txt
+      # ── 3. Dependencies ──
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Cache Xray binary
+      # ── 4. Xray Cache ──
+      - name: ⚡ Cache Xray binary
         uses: actions/cache@v4
         with:
           path: xray
           key: xray-${{ runner.os }}-v1
 
-      - name: Run bot (auto-restart)
+      # ── 5. Run Bot (with auto-restart) ──
+      - name: 🤖 Run bot (auto-restart)
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
-          MAX_TO_TEST: "30000"
-          QUICK_N: "15000"
-          DEEP_QUICK: "5000"
-          DEEP_LIMIT: "5000"
+          # Settings from workflow_dispatch or defaults
+          MAX_TO_TEST: ${{ github.event.inputs.max_to_test || '30000' }}
+          QUICK_N: ${{ github.event.inputs.quick_n || '15000' }}
+          DEEP_LIMIT: ${{ github.event.inputs.deep_limit || '1500' }}
+          # Tuning
+          DEEP_QUICK: "1500"
           WAVE: "100"
-          TCP_TIMEOUT: "2"
-          TCP_WORKERS: "600"
-          DEEP_WORKERS: "100"
-          DEEP_TIMEOUT: "5"
+          TCP_TIMEOUT: "2.5"
+          TCP_WORKERS: "500"
+          DEEP_WORKERS: "60"
+          DEEP_TIMEOUT: "6"
           SPEED_BYTES: "131072"
-          CACHE_TTL: "86400"
-          REFRESH_EVERY: "60"
+          REFRESH_EVERY: "900"
         run: |
+          echo "::group::⚙️ Configuration"
+          echo "  MAX_TO_TEST  = $MAX_TO_TEST"
+          echo "  QUICK_N      = $QUICK_N"
+          echo "  DEEP_LIMIT   = $DEEP_LIMIT"
+          echo "  TCP_WORKERS  = $TCP_WORKERS"
+          echo "  DEEP_WORKERS = $DEEP_WORKERS"
+          echo "  DEEP_TIMEOUT = $DEEP_TIMEOUT"
+          echo "::endgroup::"
+
           end=$((SECONDS + 330*60))
           n=0
           while [ $SECONDS -lt $end ]; do
             n=$((n+1))
             remain=$((end - SECONDS))
-            echo "=== run #$n | elapsed ${SECONDS}s | remaining ${remain}s ==="
+            echo "::group::🔄 Run #$n — remaining ${remain}s"
             timeout "$remain" python main.py
             code=$?
+            echo "::endgroup::"
+
             if [ $code -eq 124 ]; then
-              echo "time budget reached — exiting"
+              echo "⏰ Time budget reached — exiting cleanly"
               break
             fi
-            echo "exited with code $code — restart in 5s"
+
+            echo "⚠️ Bot exited with code $code — restarting in 5s"
             sleep 5
           done
+
+      # ── 6. Run Summary ──
+      - name: 📊 Write run summary
+        if: always()
+        run: |
+          echo "### ⚡ HiVo Configs — Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|:---|:---|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔄 Trigger | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🏃 Run | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏱ Duration | Check job log |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🕐 Time | \`$(date -u +'%Y-%m-%d %H:%M:%S UTC')\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> For detailed stats, check the bot's \`/stats\` command." >> $GITHUB_STEP_SUMMARY
