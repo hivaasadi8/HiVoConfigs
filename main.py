@@ -39,11 +39,13 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 # ══════════════════════════════════════════
 
 FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
-def fa(x): return str(x).translate(FA)
+
+
+def fa(x):
+    return str(x).translate(FA)
 
 
 def bar(pct, n=10, on="▰", off="▱"):
-    """Progress bar: bar(0.8) → ▰▰▰▰▰▰▰▰▱▱"""
     pct = max(0.0, min(1.0, float(pct)))
     filled = int(round(pct * n))
     return on * filled + off * (n - filled)
@@ -55,27 +57,20 @@ def stars(score):
 
 
 def box_top(title, w=24):
-    title = f" {title} "
+    title = " " + title + " "
     pad = max(0, w - len(title))
     left = pad // 2
     right = pad - left
-    return f"┏{'━' * left}{title}{'━' * right}┓"
+    return "┏" + ("━" * left) + title + ("━" * right) + "┓"
 
 
 def box_bot(w=24):
-    return f"┗{'━' * w}┛"
-
-
-def line(w=22):
-    return "━" * w
-
-
-def thin(w=22):
-    return "─" * w
+    return "┗" + ("━" * w) + "┛"
 
 
 def status_dot(online=True, testing=False):
-    if testing: return "◌"
+    if testing:
+        return "◌"
     return "◉" if online else "○"
 
 
@@ -83,28 +78,31 @@ def fa_ago(dt):
     if not dt:
         return "—"
     s = int((datetime.now() - dt).total_seconds())
-    if s < 60: return f"{fa(s)} ثانیه"
-    if s < 3600: return f"{fa(s // 60)} دقیقه"
-    if s < 86400: return f"{fa(s // 3600)} ساعت"
-    return f"{fa(s // 86400)} روز"
+    if s < 60:
+        return fa(s) + " ثانیه"
+    if s < 3600:
+        return fa(s // 60) + " دقیقه"
+    if s < 86400:
+        return fa(s // 3600) + " ساعت"
+    return fa(s // 86400) + " روز"
 
 
 def uptime():
     s = int((datetime.now() - STARTED).total_seconds())
     hh, rem = divmod(s, 3600)
-    return f"{fa(hh)} ساعت"
+    return fa(hh) + " ساعت"
 
 
 def speed_str(v):
     if not v:
         return "—"
-    return f"{fa(v)} MB/s"
+    return fa(v) + " MB/s"
 
 
 def stab_str(v):
     if v is None:
         return "—"
-    return f"{fa(int(v * 100))}٪"
+    return fa(int(v * 100)) + "٪"
 
 
 SEP = "━━━━━━━━━━━━━━━━━━━━━"
@@ -121,7 +119,8 @@ PENDING_MAX = 2000
 #  Core Helpers
 # ══════════════════════════════════════════
 
-def h(t): return html.escape(str(t))
+def h(t):
+    return html.escape(str(t))
 
 
 def register(update):
@@ -157,12 +156,12 @@ async def gate(update, ctx):
         [InlineKeyboardButton("✓  بررسی عضویت", callback_data="recheck")],
     ])
     await update.effective_message.reply_html(
-        f"{box_top('🔒 دسترسی محدود')}\n"
-        f"{SEP}\n\n"
-        f"  برای استفاده از ربات،\n"
-        f"  اول باید عضو کانال بشی.\n\n"
-        f"{SEP}\n"
-        f"  کانال: <code>{h(ch)}</code>",
+        box_top("🔒 دسترسی محدود") + "\n"
+        + SEP + "\n\n"
+        + "  برای استفاده از ربات،\n"
+        + "  اول باید عضو کانال بشی.\n\n"
+        + SEP + "\n"
+        + "  کانال: <code>" + h(ch) + "</code>",
         reply_markup=kb)
     return False
 
@@ -182,29 +181,33 @@ def qr_bytes(url):
 def card_text(c, title="کانفیگ زنده"):
     flag = c.get("flag", "🌐")
     country = c.get("country") or "نامشخص"
-    city = f" · {c['city']}" if c.get("city") else ""
+    city = " · " + c["city"] if c.get("city") else ""
     sc = c.get("score", 0)
     sp = c.get("speed") or 0
     stab = c.get("stability")
 
     sc_bar = bar(sc / 100, 10)
-    sp_bar = bar(min(sp / 3, 1.0), 10) if sp else bar(0, 10)
-    stab_bar = bar(stab if stab is not None else 0, 10)
+    st_bar = bar(stab if stab is not None else 0, 10)
 
-    return (
-        f"{box_top(f'⚡ {title}')}\n\n"
-        f"  امتیاز  <b>{fa(sc)}</b> از ۱۰۰\n"
-        f"  {sc_bar}  {stars(sc)}\n\n"
-        f"{SEP}\n"
-        f"  {status_dot(True)} <b>پینگ</b>        {fa(c['latency'])} ms\n"
-        f"  {status_dot(True)} <b>سرعت</b>       {speed_str(c.get('speed'))}\n"
-        f"  {status_dot(True)} <b>پروتکل</b>     {c.get('proto', '?').upper()}\n"
-        f"  {status_dot(True)} <b>موقعیت</b>     {flag} {h(country)}{h(city)}\n"
-        f"  {status_dot(True)} <b>پایداری</b>    {stab_str(stab)}\n"
-        f"{SEP}\n\n"
-        f"  <code>{h(c['host'])}:{fa(c['port'])}</code>\n\n"
-        f"{box_bot()}"
-    )
+    lines = [
+        box_top("⚡ " + title),
+        "",
+        "  امتیاز  <b>" + fa(sc) + "</b> از ۱۰۰",
+        "  " + sc_bar + "  " + stars(sc),
+        "",
+        SEP,
+        "  " + status_dot(True) + " <b>پینگ</b>        " + fa(c["latency"]) + " ms",
+        "  " + status_dot(True) + " <b>سرعت</b>       " + speed_str(c.get("speed")),
+        "  " + status_dot(True) + " <b>پروتکل</b>     " + c.get("proto", "?").upper(),
+        "  " + status_dot(True) + " <b>موقعیت</b>     " + flag + " " + h(country) + h(city),
+        "  " + status_dot(True) + " <b>پایداری</b>    " + stab_str(stab),
+        SEP,
+        "",
+        "  <code>" + h(c["host"]) + ":" + fa(c["port"]) + "</code>",
+        "",
+        box_bot(),
+    ]
+    return "\n".join(lines)
 
 
 def menu_text():
@@ -216,17 +219,19 @@ def menu_text():
     online = alive > 0
     dot = status_dot(online)
 
-    body = (
-        f"{box_top('⚡ HiVo Configs')}\n\n"
-        f"  {dot} <b>ربات فعال</b>\n"
-        f"  <b>{fa(alive)}</b> کانفیگ زنده  ·  <b>{fa(fast)}</b> سرعت‌سنجی\n"
-        f"  <b>{fa(countries)}</b> کشور  ·  {fa_ago(S['last'])} پیش\n\n"
-        f"{SEP}"
-    )
+    parts = [
+        box_top("⚡ HiVo Configs"),
+        "",
+        "  " + dot + " <b>ربات فعال</b>",
+        "  <b>" + fa(alive) + "</b> کانفیگ زنده  ·  <b>" + fa(fast) + "</b> سرعت‌سنجی",
+        "  <b>" + fa(countries) + "</b> کشور  ·  " + fa_ago(S["last"]) + " پیش",
+        "",
+        SEP,
+    ]
     if wel:
-        body += f"\n\n<i>{h(wel)}</i>\n\n{SEP}"
-    body += f"\n\n  ⏱ آپ‌تایم: {uptime()}\n\n{box_bot()}"
-    return body
+        parts += ["", "<i>" + h(wel) + "</i>", "", SEP]
+    parts += ["", "  ⏱ آپ‌تایم: " + uptime(), "", box_bot()]
+    return "\n".join(parts)
 
 
 def stats_text():
@@ -239,76 +244,90 @@ def stats_text():
     for i, c in enumerate(tops, 1):
         f_ = c.get("flag", "🌐")
         top_lines.append(
-            f"  {fa(i)}.  {stars(c.get('score', 0))}\n"
-            f"      {f_}  {fa(c['latency'])}ms  ·  {speed_str(c.get('speed'))}"
+            "  " + fa(i) + ".  " + stars(c.get("score", 0)) + "\n"
+            + "      " + f_ + "  " + fa(c["latency"]) + "ms  ·  " + speed_str(c.get("speed"))
         )
     top_body = "\n".join(top_lines) or "  سکوت؛ فعلاً برترین‌ها در راهن"
 
-    return (
-        f"{box_top('📊 آمار زنده')}\n\n"
-        f"  ◉ <b>دریافت‌شده</b>     {fa(S['fetched'])}\n"
-        f"  ◉ <b>تست TCP</b>       {fa(S['tested'])}\n"
-        f"  ◉ <b>زنده نهایی</b>    {fa(len(g))}\n"
-        f"  ◉ <b>سرعت‌سنجی</b>     {fa(S.get('fast', 0))}\n"
-        f"  ◉ <b>میانگین امتیاز</b>  {fa(avg)}\n"
-        f"  ◉ <b>نرخ تأیید</b>     {fa(rate)}٪\n"
-        f"  {bar(rate / 100, 12)}\n\n"
-        f"{SEP}\n"
-        f"  <b>🏆 برترین‌ها</b>\n"
-        f"<blockquote>{top_body}</blockquote>\n\n"
-        f"{SEP}\n"
-        f"  از <b>{fa(len(current_sources()))}</b> منبع\n"
-        f"  آپ‌تایم: {uptime()}\n\n"
-        f"{box_bot()}"
-    )
+    lines = [
+        box_top("📊 آمار زنده"),
+        "",
+        "  ◉ <b>دریافت‌شده</b>     " + fa(S["fetched"]),
+        "  ◉ <b>تست TCP</b>       " + fa(S["tested"]),
+        "  ◉ <b>زنده نهایی</b>    " + fa(len(g)),
+        "  ◉ <b>سرعت‌سنجی</b>     " + fa(S.get("fast", 0)),
+        "  ◉ <b>میانگین امتیاز</b>  " + fa(avg),
+        "  ◉ <b>نرخ تأیید</b>     " + fa(rate) + "٪",
+        "  " + bar(rate / 100, 12),
+        "",
+        SEP,
+        "  <b>🏆 برترین‌ها</b>",
+        "<blockquote>" + top_body + "</blockquote>",
+        "",
+        SEP,
+        "  از <b>" + fa(len(current_sources())) + "</b> منبع",
+        "  آپ‌تایم: " + uptime(),
+        "",
+        box_bot(),
+    ]
+    return "\n".join(lines)
 
 
 def help_text(is_admin=False):
-    t = (
-        f"{box_top('ℹ راهنما')}\n\n"
-        f"  <b>دستورات:</b>\n"
-        f"  <code>/start</code>       منوی اصلی\n"
-        f"  <code>/configs N</code>   دریافت N کانفیگ\n"
-        f"  <code>/stats</code>       آمار زنده\n"
-        f"  <code>/sub</code>         لینک سابسکرایبشن\n"
-        f"  <code>/help</code>        همین پیام\n\n"
-        f"{SEP}\n"
-        f"  <b>نکات:</b>\n"
-        f"  ◉  هر کانفیگی بفرستی، تستش می‌کنم\n"
-        f"  ◉  هرچی عدد بفرستی، همون تعداد می‌فرستم\n"
-        f"  ◉  تو هر چتی بنویس <code>@ربات 10</code>\n\n"
-        f"{SEP}\n"
-        f"  <b>وضعیت‌ها:</b>\n"
-        f"  ◉  <b>زنده</b>       تونل واقعی پاس شد\n"
-        f"  ◌  <b>مشکوک</b>     پورت بازه، تونل پاس نشد\n"
-        f"  ○  <b>مرده</b>       حتی TCP هم جواب نداد\n\n"
-        f"{box_bot()}"
-    )
+    lines = [
+        box_top("ℹ راهنما"),
+        "",
+        "  <b>دستورات:</b>",
+        "  <code>/start</code>       منوی اصلی",
+        "  <code>/configs N</code>   دریافت N کانفیگ",
+        "  <code>/stats</code>       آمار زنده",
+        "  <code>/sub</code>         لینک سابسکرایبشن",
+        "  <code>/help</code>        همین پیام",
+        "",
+        SEP,
+        "  <b>نکات:</b>",
+        "  ◉  هر کانفیگی بفرستی، تستش می‌کنم",
+        "  ◉  هرچی عدد بفرستی، همون تعداد می‌فرستم",
+        "  ◉  تو هر چتی بنویس <code>@ربات 10</code>",
+        "",
+        SEP,
+        "  <b>وضعیت‌ها:</b>",
+        "  ◉  <b>زنده</b>       تونل واقعی پاس شد",
+        "  ◌  <b>مشکوک</b>     پورت بازه، تونل پاس نشد",
+        "  ○  <b>مرده</b>       حتی TCP هم جواب نداد",
+        "",
+        box_bot(),
+    ]
+    t = "\n".join(lines)
     if is_admin:
-        t += f"\n\n{SEP}\n  👑 ادمین: <code>/admin</code>"
+        t += "\n\n" + SEP + "\n  👑 ادمین: <code>/admin</code>"
     return t
 
 
 def admin_panel_text():
     st = STORE.data["settings"]
     lock = "🟢 روشن" if st.get("lock_on") else "○ خاموش"
-    return (
-        f"{box_top('👑 پنل مدیریت')}\n\n"
-        f"  ┌─ 📊 داده‌ها\n"
-        f"  │   کاربران  ·  آمار\n"
-        f"  ├─ 🎯 محتوا\n"
-        f"  │   ویژه  ·  منابع\n"
-        f"  ├─ ⚙ تنظیمات\n"
-        f"  │   کانال  ·  متن\n"
-        f"  └─ 📣 ارتباطات\n"
-        f"      پیام همگانی\n\n"
-        f"{SEP}\n"
-        f"  ◉ کاربران      {fa(len(STORE.users()))}\n"
-        f"  ◉ ویژه          {fa(len(STORE.premium()))}\n"
-        f"  ◉ منابع         {fa(len(current_sources()))}\n"
-        f"  ◉ قفل کانال     {lock}\n\n"
-        f"{box_bot()}"
-    )
+    lines = [
+        box_top("👑 پنل مدیریت"),
+        "",
+        "  ┌─ 📊 داده‌ها",
+        "  │   کاربران  ·  آمار",
+        "  ├─ 🎯 محتوا",
+        "  │   ویژه  ·  منابع",
+        "  ├─ ⚙ تنظیمات",
+        "  │   کانال  ·  متن",
+        "  └─ 📣 ارتباطات",
+        "      پیام همگانی",
+        "",
+        SEP,
+        "  ◉ کاربران      " + fa(len(STORE.users())),
+        "  ◉ ویژه          " + fa(len(STORE.premium())),
+        "  ◉ منابع         " + fa(len(current_sources())),
+        "  ◉ قفل کانال     " + lock,
+        "",
+        box_bot(),
+    ]
+    return "\n".join(lines)
 
 
 def users_text():
@@ -317,57 +336,70 @@ def users_text():
     active = sum(1 for u in users.values() if (u.get("last") or "").startswith(today))
     tot = STORE.data.get("totals", {})
     top = sorted(users.items(), key=lambda kv: kv[1].get("count", 0), reverse=True)[:8]
-    lines = [f"  {fa(i)}. {h(u.get('name') or '—')}  ·  {fa(u.get('count', 0))}"
-             for i, (_, u) in enumerate(top, 1)]
-    body = "\n".join(lines) or "  —"
-    return (
-        f"{box_top('👥 کاربران')}\n\n"
-        f"  ◉ کل           {fa(len(users))}\n"
-        f"  ◉ امروز        {fa(active)}\n"
-        f"  ◉ فایل‌ها       {fa(tot.get('files', 0))}\n"
-        f"  ◉ کانفیگ‌ها    {fa(tot.get('configs', 0))}\n\n"
-        f"{SEP}\n"
-        f"  <b>🏆 پرکاربردترها</b>\n"
-        f"<blockquote>{body}</blockquote>\n\n"
-        f"{box_bot()}"
-    )
+    lines_list = []
+    for i, (_, u) in enumerate(top, 1):
+        lines_list.append("  " + fa(i) + ". " + h(u.get("name") or "—") + "  ·  " + fa(u.get("count", 0)))
+    body = "\n".join(lines_list) or "  —"
+    lines = [
+        box_top("👥 کاربران"),
+        "",
+        "  ◉ کل           " + fa(len(users)),
+        "  ◉ امروز        " + fa(active),
+        "  ◉ فایل‌ها       " + fa(tot.get("files", 0)),
+        "  ◉ کانفیگ‌ها    " + fa(tot.get("configs", 0)),
+        "",
+        SEP,
+        "  <b>🏆 پرکاربردترها</b>",
+        "<blockquote>" + body + "</blockquote>",
+        "",
+        box_bot(),
+    ]
+    return "\n".join(lines)
 
 
 def sources_text():
-    lines = []
+    lines_list = []
     for r in source_report():
         name = r["url"].replace("https://raw.githubusercontent.com/", "")
         if len(name) > 42:
             name = name[:42] + "…"
         if r["cooldown"]:
-            tag = f"◌ {fa(r['cooldown'] // 60)}د"
+            tag = "◌ " + fa(r["cooldown"] // 60) + "د"
         elif r["fail"]:
-            tag = f"○ {fa(r['fail'])}"
+            tag = "○ " + fa(r["fail"])
         else:
             tag = "◉"
-        lines.append(f"  {tag}  <code>{h(name)}</code>  {fa(r['count'])}")
-    body = "\n".join(lines) or "  —"
+        lines_list.append("  " + tag + "  <code>" + h(name) + "</code>  " + fa(r["count"]))
+    body = "\n".join(lines_list) or "  —"
     custom = STORE.sources()
-    mode = f"اختصاصی ({fa(len(custom))})" if custom else "پیش‌فرض"
-    return (
-        f"{box_top('📡 منابع')}\n\n"
-        f"  حالت: <b>{mode}</b>\n\n"
-        f"<blockquote expandable>{body}</blockquote>\n\n"
-        f"{box_bot()}"
-    )
+    mode = "اختصاصی (" + fa(len(custom)) + ")" if custom else "پیش‌فرض"
+    lines = [
+        box_top("📡 منابع"),
+        "",
+        "  حالت: <b>" + mode + "</b>",
+        "",
+        "<blockquote expandable>" + body + "</blockquote>",
+        "",
+        box_bot(),
+    ]
+    return "\n".join(lines)
 
 
 def settings_text():
     st = STORE.data["settings"]
     wel = st.get("welcome", "").strip() or "پیش‌فرض"
     lock = "🟢 روشن" if st.get("lock_on") else "○ خاموش"
-    return (
-        f"{box_top('⚙ تنظیمات')}\n\n"
-        f"  ◉ متن خوش‌آمد\n"
-        f"     <i>{h(wel[:50])}</i>\n\n"
-        f"  ◉ قفل کانال     {lock}\n\n"
-        f"{box_bot()}"
-    )
+    lines = [
+        box_top("⚙ تنظیمات"),
+        "",
+        "  ◉ متن خوش‌آمد",
+        "     <i>" + h(wel[:50]) + "</i>",
+        "",
+        "  ◉ قفل کانال     " + lock,
+        "",
+        box_bot(),
+    ]
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════
@@ -449,8 +481,8 @@ def countries_kb():
     for i in range(0, len(top), 2):
         chunk = top[i:i + 2]
         rows.append([
-            InlineKeyboardButton(f"{flagmap[n]} {n}  ·  {fa(ct)}",
-                                  callback_data=f"cty2:{n}")
+            InlineKeyboardButton(flagmap[n] + " " + n + "  ·  " + fa(ct),
+                                  callback_data="cty2:" + n)
             for n, ct in chunk
         ])
     rows.append([InlineKeyboardButton("◀ بازگشت", callback_data="srch")])
@@ -467,8 +499,8 @@ def protocols_kb():
     for i in range(0, len(items), 2):
         chunk = items[i:i + 2]
         rows.append([
-            InlineKeyboardButton(f"{names.get(p, p.upper())}  ·  {fa(ct)}",
-                                  callback_data=f"prt2:{p}")
+            InlineKeyboardButton(names.get(p, p.upper()) + "  ·  " + fa(ct),
+                                  callback_data="prt2:" + p)
             for p, ct in chunk
         ])
     rows.append([InlineKeyboardButton("◀ بازگشت", callback_data="srch")])
@@ -559,14 +591,17 @@ async def on_inline(update, ctx):
     items = g[offset:offset + 12]
     results = []
     for i, c in enumerate(items, offset + 1):
+        body = (
+            "⚡ <b>HiVo Configs</b>\n"
+            "★" + fa(c.get("score", 0)) + "  ·  " + fa(c["latency"]) + "ms\n\n"
+            "<code>" + h(export_uri(c)) + "</code>"
+        )
         results.append(InlineQueryResultArticle(
             id=str(i),
-            title=f"★{c.get('score', 0)}  ·  {c['latency']}ms  ·  HiVo",
+            title="★" + str(c.get("score", 0)) + "  ·  " + str(c["latency"]) + "ms  ·  HiVo",
             description=c["uri"][:90],
             input_message_content=InputTextMessageContent(
-                message_text=(f"⚡ <b>HiVo Configs</b>\n"
-                              f"★{fa(c.get('score', 0))}  ·  {fa(c['latency'])}ms\n\n"
-                              f"<code>{h(export_uri(c))}</code>"),
+                message_text=body,
                 parse_mode=ParseMode.HTML),
         ))
     await q.answer(results, cache_time=10, is_personal=True,
@@ -606,27 +641,28 @@ async def send_config_file(message, n=None, items=None, title=None):
     g = sorted(list(S["good"]), key=lambda c: -c.get("score", 0)) if items is None else list(items)
     if not g:
         await message.reply_html(
-            f"{box_top('⏳ در راه است')}\n\n"
-            f"  {SEP}\n"
-            f"  هنوز کانفیگی آماده نیست.\n"
-            f"  چند دقیقه دیگه امتحان کن.\n\n"
-            f"{box_bot()}")
+            box_top("⏳ در راه است") + "\n\n"
+            + "  " + SEP + "\n"
+            + "  هنوز کانفیگی آماده نیست.\n"
+            + "  چند دقیقه دیگه امتحان کن.\n\n"
+            + box_bot())
         return
     its = g if (n is None or n >= len(g)) else g[:n]
     await message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
     content = "\n".join(export_uri(c) for c in its) + "\n"
     buf = io.BytesIO(content.encode())
     best = its[0]
+    header = "⚡ " + (title if title else "HiVo Configs")
     caption = (
-        f"{box_top(f'⚡ {title or \"HiVo Configs\"}')}\n\n"
-        f"  ◉ تعداد       <b>{fa(len(its))}</b> کانفیگ\n"
-        f"  ◉ بهترین       ★{fa(best.get('score', 0))}  ·  {fa(best['latency'])}ms\n\n"
-        f"{SEP}\n"
-        f"  <i>تست تونل واقعی پاس شده</i>\n\n"
-        f"{box_bot()}"
+        box_top(header) + "\n\n"
+        + "  ◉ تعداد       <b>" + fa(len(its)) + "</b> کانفیگ\n"
+        + "  ◉ بهترین       ★" + fa(best.get("score", 0)) + "  ·  " + fa(best["latency"]) + "ms\n\n"
+        + SEP + "\n"
+        + "  <i>تست تونل واقعی پاس شده</i>\n\n"
+        + box_bot()
     )
     msg = await message.reply_document(
-        document=buf, filename=f"HiVo-{len(its)}.txt",
+        document=buf, filename="HiVo-" + str(len(its)) + ".txt",
         caption=caption, parse_mode=ParseMode.HTML)
     await react(msg)
     STORE.add_totals(files=1, configs=len(its))
@@ -652,18 +688,18 @@ async def send_premium(message):
     prem = STORE.premium()
     if not prem:
         await message.reply_html(
-            f"{box_top('👑 ویژه')}\n\n"
-            f"  {SEP}\n"
-            f"  هنوز کانفیگ ویژه‌ای اضافه نشده.\n\n"
-            f"{box_bot()}")
+            box_top("👑 ویژه") + "\n\n"
+            + "  " + SEP + "\n"
+            + "  هنوز کانفیگ ویژه‌ای اضافه نشده.\n\n"
+            + box_bot())
         return
     uris = [premium_uri(u) for u in prem]
     await message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
     buf = io.BytesIO(("\n".join(uris) + "\n").encode())
     caption = (
-        f"{box_top('👑 HiVo Premium')}\n\n"
-        f"  ◉ تعداد  <b>{fa(len(uris))}</b> کانفیگ ویژه\n\n"
-        f"{box_bot()}")
+        box_top("👑 HiVo Premium") + "\n\n"
+        + "  ◉ تعداد  <b>" + fa(len(uris)) + "</b> کانفیگ ویژه\n\n"
+        + box_bot())
     msg = await message.reply_document(
         document=buf, filename="HiVo-Premium.txt",
         caption=caption, parse_mode=ParseMode.HTML)
@@ -675,19 +711,19 @@ async def send_sub(message):
     url = S.get("sub")
     if not url:
         await message.reply_html(
-            f"{box_top('🔗 سابسکرایبشن')}\n\n"
-            f"  {SEP}\n"
-            f"  هنوز آماده نیست.\n"
-            f"  چند دقیقه دیگه امتحان کن.\n\n"
-            f"{box_bot()}")
+            box_top("🔗 سابسکرایبشن") + "\n\n"
+            + "  " + SEP + "\n"
+            + "  هنوز آماده نیست.\n"
+            + "  چند دقیقه دیگه امتحان کن.\n\n"
+            + box_bot())
         return
     txt = (
-        f"{box_top('🔗 سابسکرایبشن')}\n\n"
-        f"  {SEP}\n"
-        f"  <code>{h(url)}</code>\n"
-        f"  {SEP}\n\n"
-        f"  هر ۱۵ دقیقه بروز میشه.\n\n"
-        f"{box_bot()}"
+        box_top("🔗 سابسکرایبشن") + "\n\n"
+        + "  " + SEP + "\n"
+        + "  <code>" + h(url) + "</code>\n"
+        + "  " + SEP + "\n\n"
+        + "  هر ۱۵ دقیقه بروز میشه.\n\n"
+        + box_bot()
     )
     await message.reply_html(txt, reply_markup=sub_kb())
 
@@ -699,53 +735,53 @@ async def send_qr(message):
         return
     msg = await message.reply_photo(
         photo=qr_bytes(url),
-        caption=(f"{box_top('📱 QR سابسکرایبشن')}\n\n"
-                 f"  <code>{h(url)}</code>\n\n"
-                 f"{box_bot()}"),
+        caption=(box_top("📱 QR سابسکرایبشن") + "\n\n"
+                 + "  <code>" + h(url) + "</code>\n\n"
+                 + box_bot()),
         parse_mode=ParseMode.HTML)
     await react(msg)
 
 
 async def run_single_test(message, uri):
     wait = await message.reply_html(
-        f"{box_top('🧪 در حال تست')}\n\n"
-        f"  {status_dot(True, testing=True)} اتصال واقعی...\n"
-        f"  <i>حداکثر ۲۰ ثانیه</i>\n\n"
-        f"{box_bot()}")
+        box_top("🧪 در حال تست") + "\n\n"
+        + "  " + status_dot(True, testing=True) + " اتصال واقعی...\n"
+        + "  <i>حداکثر ۲۰ ثانیه</i>\n\n"
+        + box_bot())
     try:
         res = await asyncio.get_running_loop().run_in_executor(None, test_single, uri.strip())
     except Exception:
         log.exception("single test")
         await wait.edit_text(
-            f"{box_top('⚠ خطا')}\n\n"
-            f"  تست الان ممکن نشد.\n"
-            f"  بعداً امتحان کن.\n\n"
-            f"{box_bot()}")
+            box_top("⚠ خطا") + "\n\n"
+            + "  تست الان ممکن نشد.\n"
+            + "  بعداً امتحان کن.\n\n"
+            + box_bot())
         return
     if res is None:
         await wait.edit_text(
-            f"{box_top('○ پاسخ نداد')}\n\n"
-            f"  {SEP}\n"
-            f"  این کانفیگ به آخر خط رسیده.\n\n"
-            f"{box_bot()}")
+            box_top("○ پاسخ نداد") + "\n\n"
+            + "  " + SEP + "\n"
+            + "  این کانفیگ به آخر خط رسیده.\n\n"
+            + box_bot())
         return
     if not res.get("deep"):
         await wait.edit_text(
-            f"{box_top('◌ مشکوک')}\n\n"
-            f"  ◉ <b>پینگ</b>       {fa(res['latency'])} ms\n"
-            f"  ◉ <b>میزبان</b>     <code>{h(res['host'])}:{fa(res['port'])}</code>\n\n"
-            f"  {SEP}\n"
-            f"  پورت بازه، ولی تونل واقعی\n"
-            f"  پاس نشد.\n\n"
-            f"{box_bot()}",
+            box_top("◌ مشکوک") + "\n\n"
+            + "  ◉ <b>پینگ</b>       " + fa(res["latency"]) + " ms\n"
+            + "  ◉ <b>میزبان</b>     <code>" + h(res["host"]) + ":" + fa(res["port"]) + "</code>\n\n"
+            + "  " + SEP + "\n"
+            + "  پورت بازه، ولی تونل واقعی\n"
+            + "  پاس نشد.\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML)
         return
     vh = res["fp"]
     pending_put(res)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 کپی کانفیگ", copy_text=export_uri(res))],
-        [InlineKeyboardButton("👍 وصل شدم", callback_data=f"vote:1:{vh}"),
-         InlineKeyboardButton("👎 نشد", callback_data=f"vote:0:{vh}")],
+        [InlineKeyboardButton("👍 وصل شدم", callback_data="vote:1:" + vh),
+         InlineKeyboardButton("👎 نشد", callback_data="vote:0:" + vh)],
     ])
     await wait.edit_text(card_text(res), parse_mode=ParseMode.HTML, reply_markup=kb)
     await react(message)
@@ -756,13 +792,13 @@ async def do_broadcast(ctx, text, status_msg):
     ok = fail = 0
     for uid in list(users.keys()):
         try:
-            await ctx.bot.send_message(int(uid), f"📣 {text}")
+            await ctx.bot.send_message(int(uid), "📣 " + text)
             ok += 1
         except Exception:
             fail += 1
         await asyncio.sleep(0.08)
-    extra = f"  ·  ✗ {fa(fail)}" if fail else ""
-    await status_msg.edit_text(f"✓ رفت به {fa(ok)} نفر{extra}")
+    extra = "  ·  ✗ " + fa(fail) if fail else ""
+    await status_msg.edit_text("✓ رفت به " + fa(ok) + " نفر" + extra)
 
 
 # ══════════════════════════════════════════
@@ -797,8 +833,7 @@ async def cmd_broadcast(update, ctx):
     parts = (update.message.text or "").split(" ", 1)
     text = parts[1].strip() if len(parts) > 1 else ""
     if not text:
-        await update.message.reply_html(
-            f"استفاده:\n<code>/broadcast متن</code>")
+        await update.message.reply_html("استفاده:\n<code>/broadcast متن</code>")
         return
     status = await update.message.reply_text("📣 در راه‌اند...")
     await do_broadcast(ctx, text, status)
@@ -807,9 +842,9 @@ async def cmd_broadcast(update, ctx):
 async def cmd_cancel(update, ctx):
     ADMIN_STATE.pop(update.effective_user.id, None)
     await update.message.reply_html(
-        f"{box_top('✓ لغو شد')}\n\n"
-        f"  بازگشت به حالت عادی.\n\n"
-        f"{box_bot()}")
+        box_top("✓ لغو شد") + "\n\n"
+        + "  بازگشت به حالت عادی.\n\n"
+        + box_bot())
 
 
 async def cmd_configs(update, ctx):
@@ -860,13 +895,11 @@ async def on_text(update, ctx):
                 return
             ADMIN_STATE.pop(uid, None)
             ok = STORE.add_source(txt.strip())
-            await update.message.reply_html(
-                "✓ منبع اضافه شد." if ok else "⚠ قبلاً اضافه شده.")
+            await update.message.reply_html("✓ منبع اضافه شد." if ok else "⚠ قبلاً اضافه شده.")
         elif state == "src:del":
             ADMIN_STATE.pop(uid, None)
             ok = STORE.remove_source(txt.strip())
-            await update.message.reply_html(
-                "🗑 حذف شد." if ok else "⚠ پیدا نشد.")
+            await update.message.reply_html("🗑 حذف شد." if ok else "⚠ پیدا نشد.")
         elif state == "premium":
             ADMIN_STATE.pop(uid, None)
             uris = URI_RE.findall(txt)
@@ -875,10 +908,10 @@ async def on_text(update, ctx):
                 return
             added = STORE.add_premium(uris)
             await update.message.reply_html(
-                f"{box_top('👑 ویژه')}\n\n"
-                f"  ✓ <b>{fa(added)}</b> کانفیگ اضافه شد\n"
-                f"  ◉ کل: <b>{fa(len(STORE.premium()))}</b>\n\n"
-                f"{box_bot()}")
+                box_top("👑 ویژه") + "\n\n"
+                + "  ✓ <b>" + fa(added) + "</b> کانفیگ اضافه شد\n"
+                + "  ◉ کل: <b>" + fa(len(STORE.premium())) + "</b>\n\n"
+                + box_bot())
         elif state == "welcome":
             ADMIN_STATE.pop(uid, None)
             if txt.lower() == "/off":
@@ -898,7 +931,7 @@ async def on_text(update, ctx):
                 STORE.set_setting("lock_channel", txt)
                 STORE.set_setting("lock_on", True)
                 await update.message.reply_html(
-                    f"📢 قفل روشن شد: <code>{h(txt)}</code>\n"
+                    "📢 قفل روشن شد: <code>" + h(txt) + "</code>\n"
                     "⚠ ربات باید ادمین کانال باشه.")
         elif state == "broadcast":
             ADMIN_STATE.pop(uid, None)
@@ -971,17 +1004,17 @@ async def on_button(update, ctx):
 
     if data == "cfg":
         await q.edit_message_text(
-            f"{box_top('⚡ کانفیگ‌ها')}\n\n"
-            f"  چند تا و چطور می‌خوای؟\n\n"
-            f"{box_bot()}",
+            box_top("⚡ کانفیگ‌ها") + "\n\n"
+            + "  چند تا و چطور می‌خوای؟\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=cfg_menu())
         return
 
     if data == "srch":
         await q.edit_message_text(
-            f"{box_top('🔍 جستجو و فیلتر')}\n\n"
-            f"  چطور می‌خوای فیلتر کنی؟\n\n"
-            f"{box_bot()}",
+            box_top("🔍 جستجو و فیلتر") + "\n\n"
+            + "  چطور می‌خوای فیلتر کنی؟\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=srch_menu())
         return
 
@@ -1037,10 +1070,10 @@ async def on_button(update, ctx):
             await send_config_file(q.message, items=fasts, title="۱۰ سریع‌ترین")
         else:
             await q.message.reply_html(
-                f"{box_top('⏳ سرعت‌سنجی')}\n\n"
-                f"  هنوز نتیجه نداده.\n"
-                f"  ۲ دقیقه دیگه امتحان کن.\n\n"
-                f"{box_bot()}")
+                box_top("⏳ سرعت‌سنجی") + "\n\n"
+                + "  هنوز نتیجه نداده.\n"
+                + "  ۲ دقیقه دیگه امتحان کن.\n\n"
+                + box_bot())
         return
 
     if data == "rnd":
@@ -1049,9 +1082,9 @@ async def on_button(update, ctx):
         g = list(S["good"])
         if not g:
             await q.message.reply_html(
-                f"{box_top('⏳ خالی')}\n\n"
-                f"  هنوز کانفیگی نیست.\n\n"
-                f"{box_bot()}")
+                box_top("⏳ خالی") + "\n\n"
+                + "  هنوز کانفیگی نیست.\n\n"
+                + box_bot())
             return
         await q.message.reply_dice(emoji="🎲")
         await asyncio.sleep(2.5)
@@ -1059,8 +1092,8 @@ async def on_button(update, ctx):
         pending_put(c)
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 کپی", copy_text=export_uri(c))],
-            [InlineKeyboardButton("👍 وصل شدم", callback_data=f"vote:1:{c['fp']}"),
-             InlineKeyboardButton("👎 نشد", callback_data=f"vote:0:{c['fp']}")],
+            [InlineKeyboardButton("👍 وصل شدم", callback_data="vote:1:" + c["fp"]),
+             InlineKeyboardButton("👎 نشد", callback_data="vote:0:" + c["fp"])],
             [InlineKeyboardButton("🎲 یکی دیگه", callback_data="rnd")],
         ])
         await q.message.reply_html(card_text(c, "کانفیگ شانسی"),
@@ -1069,12 +1102,12 @@ async def on_button(update, ctx):
 
     if data == "tester":
         await q.edit_message_text(
-            f"{box_top('📝 تست کانفیگ')}\n\n"
-            f"  هر کانفیگی داری بفرست:\n"
-            f"  vmess / vless / trojan / ss\n\n"
-            f"  تونل واقعی + سرعت + امتیاز\n"
-            f"  حداکثر ۲۰ ثانیه\n\n"
-            f"{box_bot()}",
+            box_top("📝 تست کانفیگ") + "\n\n"
+            + "  هر کانفیگی داری بفرست:\n"
+            + "  vmess / vless / trojan / ss\n\n"
+            + "  تونل واقعی + سرعت + امتیاز\n"
+            + "  حداکثر ۲۰ ثانیه\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("◀ بازگشت", callback_data="srch")],
@@ -1084,18 +1117,18 @@ async def on_button(update, ctx):
     if data == "retest":
         FORCE.set()
         await q.edit_message_text(
-            f"{box_top('♻ دور تازه')}\n\n"
-            f"  {status_dot(True, testing=True)} شروع شد.\n"
-            f"  نتایج زنده می‌آن.\n\n"
-            f"{box_bot()}",
+            box_top("♻ دور تازه") + "\n\n"
+            + "  " + status_dot(True, testing=True) + " شروع شد.\n"
+            + "  نتایج زنده می‌آن.\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML)
         return
 
     if data == "cty":
         await q.edit_message_text(
-            f"{box_top('🌍 فیلتر کشور')}\n\n"
-            f"  یکی رو انتخاب کن:\n\n"
-            f"{box_bot()}",
+            box_top("🌍 فیلتر کشور") + "\n\n"
+            + "  یکی رو انتخاب کن:\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=countries_kb())
         return
 
@@ -1110,9 +1143,9 @@ async def on_button(update, ctx):
 
     if data == "prt":
         await q.edit_message_text(
-            f"{box_top('🔌 فیلتر پروتکل')}\n\n"
-            f"  یکی رو انتخاب کن:\n\n"
-            f"{box_bot()}",
+            box_top("🔌 فیلتر پروتکل") + "\n\n"
+            + "  یکی رو انتخاب کن:\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=protocols_kb())
         return
 
@@ -1133,37 +1166,37 @@ async def on_button(update, ctx):
 
     if data == "adm:data" and is_admin:
         await q.edit_message_text(
-            f"{box_top('📊 داده‌ها')}\n\n"
-            f"  ┌─ 👥 کاربران\n"
-            f"  └─ 📈 آمار\n\n"
-            f"{box_bot()}",
+            box_top("📊 داده‌ها") + "\n\n"
+            + "  ┌─ 👥 کاربران\n"
+            + "  └─ 📈 آمار\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=adm_data_kb())
         return
 
     if data == "adm:content" and is_admin:
         await q.edit_message_text(
-            f"{box_top('🎯 محتوا')}\n\n"
-            f"  ┌─ 👑 کانفیگ ویژه\n"
-            f"  ├─ 📡 منابع\n"
-            f"  └─ 🗑 پاک‌سازی\n\n"
-            f"{box_bot()}",
+            box_top("🎯 محتوا") + "\n\n"
+            + "  ┌─ 👑 کانفیگ ویژه\n"
+            + "  ├─ 📡 منابع\n"
+            + "  └─ 🗑 پاک‌سازی\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=adm_content_kb())
         return
 
     if data == "adm:config" and is_admin:
         await q.edit_message_text(
-            f"{box_top('⚙ تنظیمات')}\n\n"
-            f"  ┌─ 📢 کانال قفل\n"
-            f"  └─ ✏️ متن خوش‌آمد\n\n"
-            f"{box_bot()}",
+            box_top("⚙ تنظیمات") + "\n\n"
+            + "  ┌─ 📢 کانال قفل\n"
+            + "  └─ ✏️ متن خوش‌آمد\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=adm_config_kb())
         return
 
     if data == "adm:comm" and is_admin:
         await q.edit_message_text(
-            f"{box_top('📣 ارتباطات')}\n\n"
-            f"  └─ 📨 پیام همگانی\n\n"
-            f"{box_bot()}",
+            box_top("📣 ارتباطات") + "\n\n"
+            + "  └─ 📨 پیام همگانی\n\n"
+            + box_bot(),
             parse_mode=ParseMode.HTML, reply_markup=adm_comm_kb())
         return
 
@@ -1184,60 +1217,60 @@ async def on_button(update, ctx):
     if data == "src:add" and is_admin:
         ADMIN_STATE[uid] = "src:add"
         await q.message.reply_html(
-            f"{box_top('➕ افزودن منبع')}\n\n"
-            f"  لینک raw که داخلش\n"
-            f"  کانفیگ باشه بفرست.\n\n"
-            f"  <code>/cancel</code> برای لغو\n\n"
-            f"{box_bot()}")
+            box_top("➕ افزودن منبع") + "\n\n"
+            + "  لینک raw که داخلش\n"
+            + "  کانفیگ باشه بفرست.\n\n"
+            + "  <code>/cancel</code> برای لغو\n\n"
+            + box_bot())
         return
 
     if data == "src:del" and is_admin:
         ADMIN_STATE[uid] = "src:del"
         await q.message.reply_html(
-            f"{box_top('➖ حذف منبع')}\n\n"
-            f"  لینک دقیق رو بفرست.\n\n"
-            f"  <code>/cancel</code> برای لغو\n\n"
-            f"{box_bot()}")
+            box_top("➖ حذف منبع") + "\n\n"
+            + "  لینک دقیق رو بفرست.\n\n"
+            + "  <code>/cancel</code> برای لغو\n\n"
+            + box_bot())
         return
 
     if data == "src:reset" and is_admin:
         STORE.reset_sources()
         await q.message.reply_html(
-            f"{box_top('♻ ریست')}\n\n"
-            f"  منابع به پیش‌فرض برگشت.\n\n"
-            f"{box_bot()}")
+            box_top("♻ ریست") + "\n\n"
+            + "  منابع به پیش‌فرض برگشت.\n\n"
+            + box_bot())
         return
 
     if data == "adm:add" and is_admin:
         ADMIN_STATE[uid] = "premium"
         await q.message.reply_html(
-            f"{box_top('👑 افزودن ویژه')}\n\n"
-            f"  کانفیگ‌ها رو بفرست\n"
-            f"  (هر خط یکی).\n\n"
-            f"  <code>/cancel</code> برای لغو\n\n"
-            f"{box_bot()}")
+            box_top("👑 افزودن ویژه") + "\n\n"
+            + "  کانفیگ‌ها رو بفرست\n"
+            + "  (هر خط یکی).\n\n"
+            + "  <code>/cancel</code> برای لغو\n\n"
+            + box_bot())
         return
 
     if data == "adm:list" and is_admin:
         prem = STORE.premium()
         if not prem:
             await q.message.reply_html(
-                f"{box_top('📜 ویژه')}\n\n"
-                f"  خالیه.\n\n"
-                f"{box_bot()}")
+                box_top("📜 ویژه") + "\n\n"
+                + "  خالیه.\n\n"
+                + box_bot())
         else:
             buf = io.BytesIO(("\n".join(prem) + "\n").encode())
             await q.message.reply_document(
                 buf, filename="premium-raw.txt",
-                caption=f"📜 {fa(len(prem))} کانفیگ ویژه")
+                caption="📜 " + fa(len(prem)) + " کانفیگ ویژه")
         return
 
     if data == "adm:clear" and is_admin:
         n = STORE.clear_premium()
         await q.message.reply_html(
-            f"{box_top('🗑 پاک شد')}\n\n"
-            f"  {fa(n)} کانفیگ حذف شد.\n\n"
-            f"{box_bot()}")
+            box_top("🗑 پاک شد") + "\n\n"
+            + "  " + fa(n) + " کانفیگ حذف شد.\n\n"
+            + box_bot())
         await q.edit_message_text(admin_panel_text(),
                                    parse_mode=ParseMode.HTML,
                                    reply_markup=admin_kb())
@@ -1246,31 +1279,31 @@ async def on_button(update, ctx):
     if data == "adm:bc" and is_admin:
         ADMIN_STATE[uid] = "broadcast"
         await q.message.reply_html(
-            f"{box_top('📨 پیام همگانی')}\n\n"
-            f"  متن پیام رو بفرست.\n\n"
-            f"  <code>/cancel</code> برای لغو\n\n"
-            f"{box_bot()}")
+            box_top("📨 پیام همگانی") + "\n\n"
+            + "  متن پیام رو بفرست.\n\n"
+            + "  <code>/cancel</code> برای لغو\n\n"
+            + box_bot())
         return
 
     if data == "adm:wel" and is_admin:
         ADMIN_STATE[uid] = "welcome"
         await q.message.reply_html(
-            f"{box_top('✏️ متن خوش‌آمد')}\n\n"
-            f"  متن رو بفرست.\n\n"
-            f"  <code>/off</code> پیش‌فرض\n"
-            f"  <code>/cancel</code> لغو\n\n"
-            f"{box_bot()}")
+            box_top("✏️ متن خوش‌آمد") + "\n\n"
+            + "  متن رو بفرست.\n\n"
+            + "  <code>/off</code> پیش‌فرض\n"
+            + "  <code>/cancel</code> لغو\n\n"
+            + box_bot())
         return
 
     if data == "adm:chan" and is_admin:
         ADMIN_STATE[uid] = "channel"
         await q.message.reply_html(
-            f"{box_top('📢 کانال قفل')}\n\n"
-            f"  آیدی کانال با @ بفرست.\n"
-            f"  ⚠ ربات باید ادمین باشه.\n\n"
-            f"  <code>/off</code> خاموشی\n"
-            f"  <code>/cancel</code> لغو\n\n"
-            f"{box_bot()}")
+            box_top("📢 کانال قفل") + "\n\n"
+            + "  آیدی کانال با @ بفرست.\n"
+            + "  ⚠ ربات باید ادمین باشه.\n\n"
+            + "  <code>/off</code> خاموشی\n"
+            + "  <code>/cancel</code> لغو\n\n"
+            + box_bot())
         return
 
     if data == "adm:lock" and is_admin:
@@ -1308,14 +1341,14 @@ async def post_init(app):
             await app.bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(
                     text="HiVo", web_app=WebAppInfo(url=APP_URL)))
-            log.info(f"menu button → {APP_URL}")
+            log.info("menu button -> " + APP_URL)
         except Exception as e:
-            log.warning(f"menu: {e}")
+            log.warning("menu: " + str(e))
 
 
 async def post_shutdown(app):
     ok = STORE.save()
-    log.info(f"final save: {ok}")
+    log.info("final save: " + str(ok))
 
 
 def main():
