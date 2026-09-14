@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v14 — Final
+#  HiVo Configs v14 — Final (English Digits)
 #  Minimal Premium · Clean · Organized
 # ══════════════════════════════════════════
 import asyncio, base64, html, io, json, logging, os, random, re, threading, time
@@ -40,11 +40,8 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 #  Primitives
 # ══════════════════════════════════════════
 
-FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
-
-
 def fa(x):
-    return str(x).translate(FA)
+    return str(x)
 
 
 def stars(score):
@@ -155,7 +152,7 @@ def card_text(c, title="کانفیگ زنده"):
     sc = c.get("score", 0)
 
     parts = [title, ""]
-    parts.append(stars(sc) + "  <b>" + fa(sc) + "</b> از ۱۰۰")
+    parts.append(stars(sc) + "  <b>" + fa(sc) + "</b> از 100")
     parts.append("")
 
     speed = c.get("speed")
@@ -333,11 +330,11 @@ def main_menu(is_admin=False):
 
 def cfg_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔥 ۱۰ سریع‌ترین", callback_data="fast")],
+        [InlineKeyboardButton("🔥 10 سریع‌ترین", callback_data="fast")],
         [
-            InlineKeyboardButton("۵۰", callback_data="file:50"),
-            InlineKeyboardButton("۱۰۰", callback_data="file:100"),
-            InlineKeyboardButton("۵۰۰", callback_data="file:500"),
+            InlineKeyboardButton("50", callback_data="file:50"),
+            InlineKeyboardButton("100", callback_data="file:100"),
+            InlineKeyboardButton("500", callback_data="file:500"),
             InlineKeyboardButton("همه", callback_data="file:all"),
         ],
         [InlineKeyboardButton("🎲 شانسی", callback_data="rnd")],
@@ -540,7 +537,6 @@ def pending_get(fp):
 # ══════════════════════════════════════════
 
 async def send_welcome(message, is_admin):
-    """GIF (اگه تنظیم شده) + متن منو."""
     kb = main_menu(is_admin)
     if WELCOME_GIF:
         try:
@@ -624,7 +620,7 @@ async def send_sub(message):
     txt = (
         "<b>🔗 سابسکرایبشن</b>\n\n"
         "<code>" + h(url) + "</code>\n\n"
-        "<i>هر ۱۵ دقیقه بروز میشه.</i>"
+        "<i>هر 15 دقیقه بروز میشه.</i>"
     )
     await message.reply_html(txt, reply_markup=sub_kb())
 
@@ -645,7 +641,7 @@ async def run_single_test(message, uri):
     wait = await message.reply_html(
         "<b>🧪 در حال تست</b>\n\n"
         "اتصال واقعی...\n"
-        "<i>حداکثر ۲۰ ثانیه</i>")
+        "<i>حداکثر 20 ثانیه</i>")
     try:
         res = await asyncio.get_running_loop().run_in_executor(None, test_single, uri.strip())
     except Exception:
@@ -947,7 +943,7 @@ async def on_button(update, ctx):
         fasts = sorted([c for c in S["good"] if c.get("speed")],
                        key=lambda c: -c["speed"])[:10]
         if fasts:
-            await send_config_file(q.message, items=fasts, title="۱۰ سریع‌ترین")
+            await send_config_file(q.message, items=fasts, title="10 سریع‌ترین")
         else:
             await q.message.reply_html("سرعت‌سنجی هنوز نتیجه نداده.")
         return
@@ -979,7 +975,7 @@ async def on_button(update, ctx):
             "هر کانفیگی داری بفرست:\n"
             "vmess / vless / trojan / ss\n\n"
             "تونل واقعی + سرعت + امتیاز\n"
-            "حداکثر ۲۰ ثانیه",
+            "حداکثر 20 ثانیه",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("◀ بازگشت", callback_data="srch")],
