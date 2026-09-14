@@ -203,7 +203,9 @@ vless://ad297a2b-ae17-4d2d-8fce-e2eafb89b145@ss97zvwnxq.miami-download.rutube.in
 vless://c423cc1b-f88e-421c-9a16-c480d84da20f@198.251.78.29:2053?encryption=none&fp=&pbk=Uk5b-Wh_uxeCc7R8NS9iWE40xc0h9wWC04rSB9yhgAw&security=reality&sid=b5d625695ec82c7e&sni=www.cloudflare.com&type=tcp#HiVo%20%E2%AD%9081%20%F0%9F%87%BA%F0%9F%87%B8%20United%20States%20%7C%20Sulphur%20Springs%20%7C%20334ms%20%7C%200.74MBs
 vless://878fb7f7-fc65-465e-a352-17c7216c6f3d@185.47.254.251:443?security=reality&encryption=none&pbk=6-_ZidygR8PRt4gtHlGCAW-PPmjEIm7Wn7MZqJU1z1Q&headerType=&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=gateway.icloud.com&sid=6c059ecfddf9b179#HiVo%20%E2%AD%9081%20%F0%9F%87%AC%F0%9F%87%B9%20Guatemala%20%7C%20Guatemala%20City%20%7C%20377ms%20%7C%200.82MBs
 trojan://CF68213490@free-hare.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9081%20%F0%9F%8C%90%20%7C%20522ms
+trojan://ND91608427@sacred-treefrog.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9081%20%F0%9F%8C%90%20%7C%20523ms
 trojan://CF68213490@welcome-monitor.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9081%20%F0%9F%8C%90%20%7C%20530ms
+trojan://CF68213490@gentle-honeybee.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9081%20%F0%9F%8C%90%20%7C%20540ms
 trojan://CF68213490@eternal-perch.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9081%20%F0%9F%8C%90%20%7C%20552ms
 trojan://CF68213490@fair-werewolf.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9081%20%F0%9F%8C%90%20%7C%20554ms
 trojan://ND91608427@exotic-chow.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9081%20%F0%9F%8C%90%20%7C%20566ms
@@ -289,6 +291,7 @@ trojan://CF68213490@adapting-giraffe.rooster465.autos:443?security=tls#HiVo%20%E
 trojan://ND91608427@nearby-egret.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9079%20%F0%9F%8C%90%20%7C%20687ms
 trojan://ND91608427@sure-humpback.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9079%20%F0%9F%8C%90%20%7C%20689ms
 trojan://AE62539071@firm-krill.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9079%20%F0%9F%8C%90%20%7C%20693ms
+trojan://FH72359861@charming-puma.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9079%20%F0%9F%8C%90%20%7C%20696ms
 trojan://ND91608427@skilled-lioness.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9079%20%F0%9F%8C%90%20%7C%20697ms
 trojan://CF68213490@accurate-frog.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9079%20%F0%9F%8C%90%20%7C%20698ms
 trojan://ND91608427@star-kiwi.rooster465.autos:443?security=tls#HiVo%20%E2%AD%9079%20%F0%9F%8C%90%20%7C%20706ms
@@ -495,6 +498,3 @@ ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprMWRCT21PQjRvcWk3VW1wMzdhMWJR@82.38.31.193:8
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpvWklvQTY5UTh5aGNRVjhrYTNQYTNB@82.38.31.13:8080#HiVo%20%E2%AD%9074%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20427ms%20%7C%200.24MBs
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpvWklvQTY5UTh5aGNRVjhrYTNQYTNB@82.38.31.162:443#HiVo%20%E2%AD%9074%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20430ms%20%7C%200.24MBs
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprMWRCT21PQjRvcWk3VW1wMzdhMWJR@82.38.31.218:8080#HiVo%20%E2%AD%9074%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20435ms%20%7C%200.26MBs
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpvWklvQTY5UTh5aGNRVjhrYTNQYTNB@82.38.31.46:8080#HiVo%20%E2%AD%9074%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20438ms%20%7C%200.26MBs
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpURkVsRzJGVnF5cUc@176.97.64.144:8388#HiVo%20%E2%AD%9074%20%F0%9F%87%B8%F0%9F%87%AC%20Singapore%20%7C%20Singapore%20%7C%20439ms%20%7C%200.24MBs
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprMWRCT21PQjRvcWk3VW1wMzdhMWJR@82.38.31.185:8080#HiVo%20%E2%AD%9074%20%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20Amsterdam%20%7C%20441ms%20%7C%200.25MBs
