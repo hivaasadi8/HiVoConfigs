@@ -1,4 +1,4 @@
-python-telegram-bot>=22.0,<23
+python-telegram-bot[rate-limiter]>=22.0,<23
 requests[socks]>=2.32,<3
 rich>=13.0,<14
 qrcode[pil]>=8.0,<9
