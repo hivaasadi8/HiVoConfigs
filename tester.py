@@ -1,87 +1,28 @@
 # -*- coding: utf-8 -*-
 # ══════════════════════════════════════════
-#  HiVo Configs v10 — Core Engine  (patched)
+#  HiVo Configs — Core Engine (v11)
+#  Minimalist, Beautiful, Powerful
 # ══════════════════════════════════════════
 import base64, hashlib, json, logging, os, platform, random, re
 import socket, ssl, subprocess, threading, time, zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs, unquote, urlsplit, quote
+from urllib.parse import parse_qs, unquote, urlsplit, quote
 
 import requests
 import socks
 import signal
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+from rich.logging import RichHandler
+from rich import print as rprint
 
 from store import STORE
 
 # ══════════════════════════════════════════
-#  GitHub Actions Pretty Logger
-# ══════════════════════════════════════════
-
-GH_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
-SUMMARY_FILE = os.environ.get("GITHUB_STEP_SUMMARY", "")
-
-# ANSI colors (کار میکنه تو گیت‌هاب لاگ)
-C_RESET = "\033[0m"
-C_BOLD = "\033[1m"
-C_DIM = "\033[2m"
-C_RED = "\033[31m"
-C_GREEN = "\033[32m"
-C_YELLOW = "\033[33m"
-C_BLUE = "\033[34m"
-C_MAGENTA = "\033[35m"
-C_CYAN = "\033[36m"
-
-
-def gh_group(title):
-    """شروع یه گروه جمع‌شو تو گیت‌هاب"""
-    if GH_ACTIONS:
-        print("::group::" + title, flush=True)
-
-
-def gh_endgroup():
-    if GH_ACTIONS:
-        print("::endgroup::", flush=True)
-
-
-def gh_warning(msg):
-    if GH_ACTIONS:
-        print("::warning::" + str(msg), flush=True)
-
-
-def gh_error(msg):
-    if GH_ACTIONS:
-        print("::error::" + str(msg), flush=True)
-
-
-def gh_notice(msg):
-    if GH_ACTIONS:
-        print("::notice::" + str(msg), flush=True)
-
-
-def banner(title, char="═", width=60):
-    """یه بنر زیبا"""
-    line = char * width
-    print("", flush=True)
-    print(C_BOLD + C_CYAN + line + C_RESET, flush=True)
-    print(C_BOLD + C_CYAN + "  " + title + C_RESET, flush=True)
-    print(C_BOLD + C_CYAN + line + C_RESET, flush=True)
-    print("", flush=True)
-
-
-def write_summary(lines):
-    """اضافه کردن به پنل بالای اجرا"""
-    if not SUMMARY_FILE:
-        return
-    try:
-        with open(SUMMARY_FILE, "a", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    except Exception:
-        pass
-
-
-# ══════════════════════════════════════════
-#  Config
+#  Configuration
 # ══════════════════════════════════════════
 
 TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2.5"))
@@ -101,9 +42,23 @@ XRAY_MIN_SIZE = int(os.environ.get("XRAY_MIN_SIZE", "5000000"))
 CACHE_TTL = int(os.environ.get("CACHE_TTL", "900"))
 MAX_CACHE = int(os.environ.get("MAX_CACHE", "20000"))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# ══════════════════════════════════════════
+#  Logger & Console
+# ══════════════════════════════════════════
+
+console = Console()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(console=console, rich_tracebacks=True, markup=True)]
+)
 log = logging.getLogger("hivo.core")
 logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+# ══════════════════════════════════════════
+#  Global State
+# ══════════════════════════════════════════
 
 S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
      "xray": False, "sub": None, "fast": 0}
@@ -154,12 +109,14 @@ DEFAULT_SOURCES = [
     "https://raw.githubusercontent.com/Kwinshadow/TelegramV2rayCollector/main/sublinks/mix.txt",
 ]
 
+# ══════════════════════════════════════════
+#  Utility Functions
+# ══════════════════════════════════════════
 
 def b64decode(s):
     s = s.strip().replace("-", "+").replace("_", "/")
     s += "=" * (-len(s) % 4)
     return base64.b64decode(s).decode("utf-8", "ignore")
-
 
 def parse_config(uri):
     try:
@@ -216,13 +173,11 @@ def parse_config(uri):
     except Exception:
         return None
 
-
 def current_sources():
     srcs = STORE.data.get("sources")
     if isinstance(srcs, list) and srcs:
         return list(srcs)
     return list(DEFAULT_SOURCES)
-
 
 def fetch_source(url):
     r = requests.get(url, timeout=25, headers={"User-Agent": "HiVo-Configs/Pro"})
@@ -231,7 +186,6 @@ def fetch_source(url):
     if "://" not in text:
         text = b64decode(text)
     return URI_RE.findall(text)
-
 
 def _safe_fetch(url):
     with _HLOCK:
@@ -245,20 +199,15 @@ def _safe_fetch(url):
             h["ok"] += 1
             h["fail"] = 0
             h["last_count"] = len(res)
-        short = url.rsplit("/", 1)[-1][:40]
-        print("  " + C_GREEN + "✓" + C_RESET + " " + short + "  " + C_DIM
-              + str(len(res)) + " کانفیگ" + C_RESET, flush=True)
         return res
     except Exception as e:
         with _HLOCK:
             h["fail"] += 1
             if h["fail"] >= 3:
                 h["cooldown_until"] = time.time() + 1800
-        short = url.rsplit("/", 1)[-1][:40]
-        print("  " + C_RED + "✗" + C_RESET + " " + short + "  " + C_DIM
-              + str(e)[:60] + C_RESET, flush=True)
+                log.warning(f"source cooldown: {url.rsplit('/', 1)[-1]}")
+        log.warning(f"src: {e}")
         return None
-
 
 def fetch_all():
     out = []
@@ -268,12 +217,22 @@ def fetch_all():
                       key=lambda u: (-(snapshot.get(u, {}).get("ok", 0)
                                        if snapshot.get(u, {}).get("ok", 0) + snapshot.get(u, {}).get("fail", 0) else 0),
                                      snapshot.get(u, {}).get("fail", 0)))
-    with ThreadPoolExecutor(10) as pool:
-        for res in pool.map(_safe_fetch, ordered):
-            if res:
-                out += res
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("[cyan]Fetching sources...", total=len(ordered))
+        with ThreadPoolExecutor(10) as pool:
+            for res in pool.map(_safe_fetch, ordered):
+                if res:
+                    out += res
+                progress.update(task, advance=1)
     return out
-
 
 def source_report():
     out = []
@@ -286,7 +245,6 @@ def source_report():
                     "cooldown": max(0, int(h.get("cooldown_until", 0) - time.time()))})
     return out
 
-
 def tcp_ping(host, port):
     try:
         t0 = time.monotonic()
@@ -295,14 +253,12 @@ def tcp_ping(host, port):
     except Exception:
         return None
 
-
 def tcp_probe(c):
     ms = tcp_ping(c["host"], c["port"])
     if ms is None:
         return None
     c["latency"] = ms
     return c
-
 
 def _verify_xray_binary(path):
     try:
@@ -312,7 +268,6 @@ def _verify_xray_binary(path):
     except Exception:
         return False
 
-
 def ensure_xray():
     global XRAY_BIN
     if XRAY_BIN and os.access(XRAY_BIN, os.X_OK):
@@ -321,7 +276,7 @@ def ensure_xray():
     local = os.path.abspath("xray")
     if os.path.exists(local) and _verify_xray_binary(local):
         XRAY_BIN = local
-        print("  " + C_GREEN + "✓" + C_RESET + " Xray از کش لود شد", flush=True)
+        log.info("xray: reused cached binary ✅")
         return True
 
     arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
@@ -339,27 +294,27 @@ def ensure_xray():
         if latest and latest not in urls:
             urls.append(latest)
     except Exception as e:
-        print("  " + C_YELLOW + "⚠" + C_RESET + " release lookup: " + str(e)[:60], flush=True)
+        log.warning(f"xray release lookup: {e}")
 
     for url in urls:
         try:
             data = requests.get(url, timeout=240).content
             if len(data) < XRAY_MIN_SIZE:
+                log.warning("xray zip too small — skipped")
                 continue
             open("xray.zip", "wb").write(data)
             with zipfile.ZipFile("xray.zip") as z:
                 z.extract("xray")
             if not _verify_xray_binary(local):
+                log.warning("xray integrity check failed")
                 continue
             XRAY_BIN = local
-            print("  " + C_GREEN + "✓" + C_RESET + " Xray دانلود شد (" + XRAY_VERSION + ")", flush=True)
+            log.info(f"xray ready ✅ version={XRAY_VERSION}")
             return True
         except Exception as e:
-            print("  " + C_YELLOW + "⚠" + C_RESET + " " + str(e)[:60], flush=True)
-    print("  " + C_RED + "✗ XRAY FAILED TO LOAD" + C_RESET, flush=True)
-    gh_error("Xray نصب نشد — تست تونل کار نمیکنه")
+            log.warning(f"xray: {e}")
+    log.error("❌ XRAY FAILED TO LOAD — deep tests will not run!")
     return False
-
 
 def _kill(proc):
     try:
@@ -371,7 +326,6 @@ def _kill(proc):
         proc.kill()
     except Exception:
         pass
-
 
 def build_stream(net, params, tls=False):
     net = (net or "tcp").lower()
@@ -401,7 +355,6 @@ def build_stream(net, params, tls=False):
     elif net == "h2":
         stream["httpSettings"] = {"path": params.get("path", "/"), "host": [params.get("host", "")]}
     return stream
-
 
 def build_outbound(uri):
     try:
@@ -451,7 +404,6 @@ def build_outbound(uri):
         return None
     return None
 
-
 def _free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -459,14 +411,12 @@ def _free_port():
     s.close()
     return p
 
-
 SOCKS_TARGETS = [
     ("www.gstatic.com", 80, b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n"),
     ("cp.cloudflare.com", 80, b"GET /generate_204 HTTP/1.1\r\nHost: cp.cloudflare.com\r\nConnection: close\r\n\r\n"),
     ("connectivitycheck.gstatic.com", 80, b"GET /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n"),
     ("www.google.com", 80, b"HEAD / HTTP/1.1\r\nHost: www.google.com\r\nConnection: close\r\n\r\n"),
 ]
-
 
 def _socks_ok(port):
     for host, p, req in SOCKS_TARGETS:
@@ -487,7 +437,6 @@ def _socks_ok(port):
             except Exception:
                 pass
     return False
-
 
 def _socks_speed(port):
     raw = socks.socksocket()
@@ -528,19 +477,16 @@ def _socks_speed(port):
         except Exception:
             pass
 
-
 def _stab_update(fp, ok):
     with _SL:
         st = STAB.setdefault(fp, [0, 0])
         st[0 if ok else 1] += 1
-
 
 def _stab_of(fp):
     with _SL:
         p, f = STAB.get(fp, [0, 0])
         t = p + f
         return round(p / t, 2) if t else 0.5
-
 
 def score_of(c):
     s = 40.0
@@ -553,7 +499,6 @@ def score_of(c):
     s += {"vless": 3, "trojan": 2, "vmess": 2, "ss": 1}.get(c.get("proto"), 0)
     return int(max(0, min(100, round(s))))
 
-
 def _cache_get(fp):
     now = time.time()
     with _CLOCK:
@@ -565,14 +510,12 @@ def _cache_get(fp):
             return None
         return dict(item.get("data", {}))
 
-
 def _cache_put(c):
     with _CLOCK:
         CACHE[c["fp"]] = {"at": time.time(), "data": dict(c)}
         if len(CACHE) > MAX_CACHE:
             for k, _ in sorted(CACHE.items(), key=lambda kv: kv[1].get("at", 0))[:len(CACHE) - MAX_CACHE]:
                 CACHE.pop(k, None)
-
 
 def deep_test(c):
     if XRAY_BIN is None or c["proto"] not in TESTABLE:
@@ -585,7 +528,7 @@ def deep_test(c):
     if out is None:
         return None
     port = _free_port()
-    path = "/tmp/xt_" + str(port) + ".json"
+    path = f"/tmp/xt_{port}.json"
     cfg = {"log": {"loglevel": "none"},
            "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "socks",
                          "settings": {"udp": False}}],
@@ -632,12 +575,10 @@ def deep_test(c):
         if not ok:
             _stab_update(c["fp"], False)
 
-
 def flag_of(cc):
     if not cc or len(cc) != 2:
         return "🌐"
     return "".join(chr(ord(c) + 127397) for c in cc.upper())
-
 
 def geo_batch(items):
     todo = sorted({c["host"] for c in items if c.get("host") and c["host"] not in GEO})[:100]
@@ -663,18 +604,17 @@ def geo_batch(items):
             f, n, city = GEO.get(c["host"], ("🌐", "", ""))
         c["flag"], c["country"], c["city"] = f, n, city
 
-
 def export_uri(c):
-    name = "HiVo ⭐" + str(c.get("score", 0))
+    name = f"HiVo ⭐{c.get('score', 0)}"
     if c.get("flag"):
-        name += " " + c["flag"]
+        name += f" {c['flag']}"
     if c.get("country"):
-        name += " " + c["country"]
+        name += f" {c['country']}"
     if c.get("city"):
-        name += " | " + c["city"]
-    name += " | " + str(c["latency"]) + "ms"
+        name += f" | {c['city']}"
+    name += f" | {c['latency']}ms"
     if c.get("speed"):
-        name += " | " + str(c["speed"]) + "MBs"
+        name += f" | {c['speed']}MBs"
     uri = c["uri"]
     if uri.lower().startswith("vmess://"):
         try:
@@ -687,10 +627,8 @@ def export_uri(c):
             return uri
     return uri.split("#", 1)[0] + "#" + quote(name, safe="")
 
-
 def _rank(c):
     return (1 if c.get("deep") else 0, c.get("score", 0), -c.get("latency", 9999))
-
 
 def dedup(items):
     best = {}
@@ -703,7 +641,6 @@ def dedup(items):
             best[fp] = c
     return list(best.values())
 
-
 def publish(alive):
     alive = [c for c in dedup(alive) if c.get("deep")]
     if not alive:
@@ -714,50 +651,18 @@ def publish(alive):
         S["fast"] = sum(1 for c in alive if c.get("speed"))
         S["last"] = datetime.now()
 
-
 def publish_tcp(snap):
     snap = dedup(snap)
     with LOCK:
         S["tcp"] = len(snap)
-
-
-def tcp_stage_all(cands, label):
-    CHUNK = 1000
-    total = len(cands)
-    survivors = []
-    for i in range(0, total, CHUNK):
-        chunk = cands[i:i + CHUNK]
-        chunk_res = []
-        with ThreadPoolExecutor(WORKERS) as pool:
-            futs = [pool.submit(tcp_probe, c) for c in chunk]
-            for fut in as_completed(futs):
-                r = fut.result()
-                if r:
-                    chunk_res.append(r)
-        survivors.extend(chunk_res)
-        with LOCK:
-            S["tested"] = i + len(chunk)
-            S["tcp"] = len(survivors)
-        done = i + len(chunk)
-        pct = int(done * 100 / total)
-        bar_filled = int(pct / 5)
-        bar = "█" * bar_filled + "░" * (20 - bar_filled)
-        print("  " + C_CYAN + bar + C_RESET + "  " + C_BOLD + str(pct) + "%" + C_RESET
-              + "  " + C_DIM + "(" + str(done) + "/" + str(total) + ")"
-              + "  ✓ " + str(len(survivors)) + " زنده" + C_RESET, flush=True)
-    snap = dedup(survivors)
-    snap.sort(key=lambda c: c["latency"])
-    publish_tcp(snap)
-    return snap
-
 
 def upload_sub(text):
     token = os.environ.get("GITHUB_TOKEN", "")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not repo:
         return None
-    api = "https://api.github.com/repos/" + repo + "/contents/sub.txt"
-    headers = {"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"}
+    api = f"https://api.github.com/repos/{repo}/contents/sub.txt"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
     try:
         r = requests.get(api, headers=headers, timeout=30)
         sha = r.json().get("sha") if r.status_code == 200 else None
@@ -766,11 +671,10 @@ def upload_sub(text):
             body["sha"] = sha
         r2 = requests.put(api, headers=headers, json=body, timeout=30)
         if r2.status_code in (200, 201):
-            return "https://raw.githubusercontent.com/" + repo + "/main/sub.txt"
+            return f"https://raw.githubusercontent.com/{repo}/main/sub.txt"
     except Exception as e:
-        print("  " + C_YELLOW + "⚠ sub upload: " + str(e)[:60] + C_RESET, flush=True)
+        log.warning(f"sub up: {e}")
     return None
-
 
 def _update_sub_now(label, info=""):
     try:
@@ -781,14 +685,47 @@ def _update_sub_now(label, info=""):
         url = upload_sub("\n".join(export_uri(c) for c in good))
         with LOCK:
             S["sub"] = url
-        print("  " + C_GREEN + "✓" + C_RESET + " sub updated → " + C_BOLD
-              + str(len(good)) + " زنده" + C_RESET, flush=True)
+        log.info(f"[{label}] {info} sub updated → {len(good)} alive")
     except Exception:
         log.exception("sub update")
 
+def tcp_stage_all(cands, label):
+    CHUNK = 1000
+    total = len(cands)
+    survivors = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("• {task.completed}/{task.total}"),
+        TextColumn("• 🟢 {task.fields[alive]}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task(f"[cyan]TCP test on {total} configs", total=total, alive=0)
+        for i in range(0, total, CHUNK):
+            chunk = cands[i:i + CHUNK]
+            chunk_res = []
+            with ThreadPoolExecutor(WORKERS) as pool:
+                futs = [pool.submit(tcp_probe, c) for c in chunk]
+                for fut in as_completed(futs):
+                    r = fut.result()
+                    if r:
+                        chunk_res.append(r)
+            survivors.extend(chunk_res)
+            with LOCK:
+                S["tested"] = i + len(chunk)
+                S["tcp"] = len(survivors)
+            progress.update(task, advance=len(chunk), alive=len(survivors))
+    snap = dedup(survivors)
+    snap.sort(key=lambda c: c["latency"])
+    publish_tcp(snap)
+    return snap
 
 def write_github_summary(label):
-    """پنل بالای اجرا — قشنگ و خلاصه"""
+    """پنل خلاصه بالای اجرا — قشنگ و خلاصه"""
     with LOCK:
         good = S["good"]
         tested = S["tested"]
@@ -836,18 +773,20 @@ def write_github_summary(label):
                          + " | ⭐ " + str(c.get("score", 0)) + " |")
         lines.append("")
 
-    write_summary(lines)
-
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+    if summary_file:
+        try:
+            with open(summary_file, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            pass
 
 def cycle(n_tcp, n_deep, label):
-    banner("🔄 دور " + label.upper() + " — شروع")
+    console.rule(f"[bold cyan]🔄 Cycle: {label.upper()}[/]")
     t_start = time.time()
 
     # ── FETCH ──
-    gh_group("📥 دریافت از منابع")
-    print("", flush=True)
-    print(C_BOLD + "📥 دریافت از " + str(len(current_sources())) + " منبع" + C_RESET, flush=True)
-    print("", flush=True)
+    console.rule("[bold]📥 Fetching Sources[/]", style="dim")
     uris = fetch_all()
     uniq = list(dict.fromkeys(uris))
     random.shuffle(uniq)
@@ -858,11 +797,7 @@ def cycle(n_tcp, n_deep, label):
     with LOCK:
         S["fetched"] = len(uniq)
         S["tested"] = 0
-    print("", flush=True)
-    print("  " + C_GREEN + "✓" + C_RESET + " کل: " + C_BOLD + str(len(uniq))
-          + C_RESET + " کانفیگ یکتا  " + C_DIM + "(" + str(len(cached_fps))
-          + " تو کش)" + C_RESET, flush=True)
-    gh_endgroup()
+    console.print(f"  [green]✓[/] Found [bold]{len(uniq)}[/] unique configs  [dim]({len(cached_fps)} in cache)[/]")
 
     # ── PARSE ──
     seen, parsed = set(), []
@@ -881,57 +816,48 @@ def cycle(n_tcp, n_deep, label):
     total = len(parsed)
 
     # ── TCP ──
-    gh_group("🔌 فاز ۱ — تست TCP روی " + str(total) + " کانفیگ")
-    print("", flush=True)
-    print(C_BOLD + "🔌 فاز ۱ — تست TCP" + C_RESET, flush=True)
-    print("", flush=True)
+    console.rule("[bold]🔌 Phase 1 — TCP Test[/]", style="dim")
     snap = tcp_stage_all(parsed, label)
-    print("", flush=True)
-    print("  " + C_GREEN + "✓" + C_RESET + " TCP پاس: " + C_BOLD
-          + str(len(snap)) + C_RESET + "/" + str(total), flush=True)
-    gh_endgroup()
+    console.print(f"  [green]✓[/] TCP passed: [bold]{len(snap)}[/]/{total}")
 
     # ── DEEP ──
     if S["xray"] and snap:
         cands = snap[:n_deep]
         n_waves = (len(cands) + WAVE - 1) // WAVE
-        gh_group("🧪 فاز ۲ — تست تونل روی " + str(len(cands)) + " کانفیگ (" + str(n_waves) + " موج)")
-        print("", flush=True)
-        print(C_BOLD + "🧪 فاز ۲ — تست تونل واقعی (Xray)" + C_RESET, flush=True)
-        print("", flush=True)
+        console.rule(f"[bold]🧪 Phase 2 — Deep Tunnel Test ({n_waves} waves)[/]", style="dim")
         deep_all = list(seed)
-        for i in range(0, len(cands), WAVE):
-            wave = cands[i:i + WAVE]
-            with ThreadPoolExecutor(DEEP_WORKERS) as pool:
-                for r in pool.map(deep_test, wave):
-                    if r:
-                        deep_all.append(r)
-            geo_batch(deep_all)
-            publish(dedup(deep_all))
-            with LOCK:
-                alive = len(S["good"])
-            wn = i // WAVE + 1
-            pct = int(wn * 100 / n_waves)
-            bar_filled = int(pct / 5)
-            bar = "█" * bar_filled + "░" * (20 - bar_filled)
-            print("  " + C_CYAN + bar + C_RESET + "  " + C_BOLD + str(pct) + "%"
-                  + C_RESET + "  " + C_DIM + "موج " + str(wn) + "/" + str(n_waves)
-                  + C_RESET + "  " + C_GREEN + "🟢 " + str(alive) + " زنده" + C_RESET,
-                  flush=True)
-            if (i // WAVE) % 2 == 1:
-                _update_sub_now(label, "wave " + str(wn) + ":")
-        print("", flush=True)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("• wave {task.completed}/{task.total}"),
+            TextColumn("• 🟢 {task.fields[alive]}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task(f"[cyan]Deep test on {len(cands)} configs", total=n_waves, alive=len(deep_all))
+            for i in range(0, len(cands), WAVE):
+                wave = cands[i:i + WAVE]
+                with ThreadPoolExecutor(DEEP_WORKERS) as pool:
+                    for r in pool.map(deep_test, wave):
+                        if r:
+                            deep_all.append(r)
+                geo_batch(deep_all)
+                publish(dedup(deep_all))
+                with LOCK:
+                    alive = len(S["good"])
+                progress.update(task, advance=1, alive=alive)
+                if (i // WAVE) % 2 == 1:
+                    _update_sub_now(label, f"wave {i // WAVE + 1}:")
         with LOCK:
             final_alive = len(S["good"])
-        print("  " + C_GREEN + "✓" + C_RESET + " فاز ۲ تموم شد: " + C_BOLD
-              + str(final_alive) + " زنده" + C_RESET, flush=True)
-        gh_endgroup()
+        console.print(f"  [green]✓[/] Phase 2 done: [bold]{final_alive}[/] alive")
     else:
-        gh_warning("فاز ۲ رد شد: xray=" + str(S["xray"]) + " snap=" + str(len(snap)))
+        log.warning(f"Phase 2 skipped: xray={S['xray']} snap={len(snap)}")
 
     # ── SUMMARY ──
-    gh_group("📊 خلاصه دور " + label)
-    print("", flush=True)
     with LOCK:
         good = list(S["good"])
         tested = S["tested"]
@@ -942,46 +868,27 @@ def cycle(n_tcp, n_deep, label):
     elapsed = int(time.time() - t_start)
     mins, secs = divmod(elapsed, 60)
 
-    print(C_BOLD + "📊 خلاصه:" + C_RESET, flush=True)
-    print("   📥 دریافت:      " + C_BOLD + str(fetched) + C_RESET, flush=True)
-    print("   🔬 تست TCP:     " + C_BOLD + str(tested) + C_RESET, flush=True)
-    print("   🟢 زنده:         " + C_BOLD + C_GREEN + str(len(good)) + C_RESET, flush=True)
-    print("   🚀 سرعت‌سنجی:    " + C_BOLD + str(fast) + C_RESET, flush=True)
-    print("   🌍 کشور:        " + C_BOLD + str(countries) + C_RESET, flush=True)
-    print("   ⭐ میانگین:      " + C_BOLD + str(avg) + C_RESET, flush=True)
-    print("   ⏱ زمان:        " + C_BOLD + str(mins) + "m " + str(secs) + "s" + C_RESET, flush=True)
-    print("", flush=True)
-    gh_endgroup()
+    table = Table(title="📊 Cycle Summary", show_header=True, header_style="bold magenta", box=None)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="bold")
+    table.add_row("📥 Fetched", str(fetched))
+    table.add_row("🔬 TCP Tested", str(tested))
+    table.add_row("🟢 Alive", f"[green]{len(good)}[/]")
+    table.add_row("🚀 Speed-tested", str(fast))
+    table.add_row("🌍 Countries", str(countries))
+    table.add_row("⭐ Avg Score", str(avg))
+    table.add_row("⏱ Duration", f"{mins}m {secs}s")
+    console.print(table)
 
     # ── GITHUB SUMMARY ──
     write_github_summary(label)
 
-    banner("✅ دور " + label.upper() + " — پایان  (" + str(mins) + "m " + str(secs) + "s)")
-    gh_notice("دور " + label + " تمام شد — " + str(len(good)) + " کانفیگ زنده")
-
+    console.rule(f"[bold green]✅ Cycle {label.upper()} — DONE ({mins}m {secs}s)[/]")
 
 def refresh_loop():
-    banner("🚀 HiVo Configs — شروع")
-    gh_group("🚀 راه‌اندازی")
-    print("", flush=True)
-    print(C_BOLD + "🚀 راه‌اندازی موتور" + C_RESET, flush=True)
-    print("", flush=True)
+    console.rule("[bold magenta]🚀 HiVo Configs — Engine Started[/]")
     S["xray"] = ensure_xray()
-    print("  " + C_GREEN + "✓" + C_RESET + " موتور آماده  ·  Xray: "
-          + (C_GREEN + "روشن" if S["xray"] else C_RED + "خاموش") + C_RESET, flush=True)
-    print("", flush=True)
-    gh_endgroup()
-
-    write_summary([
-        "# 🚀 HiVo Configs",
-        "",
-        "**Xray:** " + ("✅ روشن" if S["xray"] else "❌ خاموش"),
-        "**زمان شروع:** `" + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "`",
-        "",
-        "---",
-        "",
-    ])
-
+    console.print(f"  [green]✓[/] Xray: {'[green]ON[/]' if S['xray'] else '[red]OFF[/]'}")
     first = True
     while True:
         try:
@@ -991,20 +898,15 @@ def refresh_loop():
             cycle(MAX_TO_TEST, DEEP_LIMIT, "full")
         except Exception:
             log.exception("cycle")
-            gh_error("دور کرش کرد: " + str(Exception))
         _update_sub_now("final")
-        print("", flush=True)
-        print("  " + C_DIM + "⏰ انتظار " + str(REFRESH_EVERY // 60) + " دقیقه..."
-              + C_RESET, flush=True)
+        console.print(f"\n  [dim]⏰ Waiting {REFRESH_EVERY // 60} min...[/]")
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
-
 
 def run_cycle():
     if not S.get("xray"):
         S["xray"] = ensure_xray()
     cycle(QUICK_N, DEEP_QUICK, "ci")
-
 
 def test_single(uri):
     c = parse_config(uri)
