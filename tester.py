@@ -14,25 +14,27 @@ import signal
 
 from store import STORE
 
-TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2.5"))
+TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2"))
 MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "30000"))
 QUICK_N = int(os.environ.get("QUICK_N", "15000"))
-DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "1500"))
-DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "1500"))
-WAVE = int(os.environ.get("WAVE", "50"))
-WORKERS = int(os.environ.get("TCP_WORKERS", "500"))
-DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "80"))
-DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "6"))
+DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "5000"))
+DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "5000"))
+WAVE = int(os.environ.get("WAVE", "100"))
+WORKERS = int(os.environ.get("TCP_WORKERS", "600"))
+DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "100"))
+DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "5"))
 SPEED_BYTES = int(os.environ.get("SPEED_BYTES", "131072"))
-REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "1800"))
+REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "60"))
 SUB_LIMIT = int(os.environ.get("SUB_LIMIT", "500"))
 XRAY_VERSION = os.environ.get("XRAY_VERSION", "latest")
 XRAY_MIN_SIZE = int(os.environ.get("XRAY_MIN_SIZE", "5000000"))
-CACHE_TTL = int(os.environ.get("CACHE_TTL", "900"))
-MAX_CACHE = int(os.environ.get("MAX_CACHE", "20000"))
+CACHE_TTL = int(os.environ.get("CACHE_TTL", "86400"))
+MAX_CACHE = int(os.environ.get("MAX_CACHE", "50000"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("hivo.core")
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
      "xray": False, "sub": None, "fast": 0}
@@ -386,19 +388,33 @@ def _free_port():
     return p
 
 
+SOCKS_TARGETS = [
+    ("www.gstatic.com", 80, b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n"),
+    ("cp.cloudflare.com", 80, b"GET /generate_204 HTTP/1.1\r\nHost: cp.cloudflare.com\r\nConnection: close\r\n\r\n"),
+    ("connectivitycheck.gstatic.com", 80, b"GET /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n"),
+    ("www.google.com", 80, b"HEAD / HTTP/1.1\r\nHost: www.google.com\r\nConnection: close\r\n\r\n"),
+]
+
+
 def _socks_ok(port):
-    s = socks.socksocket()
-    s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
-    s.settimeout(3)
-    try:
-        s.connect(("www.gstatic.com", 80))
-        s.sendall(b"GET /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\n\r\n")
-        return b"204" in s.recv(64)
-    finally:
+    for host, p, req in SOCKS_TARGETS:
+        s = socks.socksocket()
+        s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
+        s.settimeout(3)
         try:
-            s.close()
+            s.connect((host, p))
+            s.sendall(req)
+            data = s.recv(256)
+            if data and (b"204" in data or b"HTTP/1." in data or b"HTTP/2" in data):
+                return True
         except Exception:
             pass
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    return False
 
 
 def _socks_speed(port):
@@ -459,6 +475,8 @@ def score_of(c):
     s += 25.0 * max(0.0, min(1.0, (2000.0 - c["latency"]) / 1900.0))
     if c.get("speed"):
         s += 25.0 * max(0.0, min(1.0, c["speed"] / 3.0))
+    else:
+        s += 10.0
     s += 10.0 * (c["stability"] if c.get("stability") is not None else 0.5)
     s += {"vless": 3, "trojan": 2, "vmess": 2, "ss": 1}.get(c.get("proto"), 0)
     return int(max(0, min(100, round(s))))
@@ -632,8 +650,7 @@ def publish_tcp(snap):
 
 
 def tcp_stage_all(cands, label):
-    """TCP test on ALL candidates at once, in chunks of 500 for progress."""
-    CHUNK = 500
+    CHUNK = 1000
     total = len(cands)
     survivors = []
     for i in range(0, total, CHUNK):
@@ -691,6 +708,41 @@ def _update_sub_now(label, info=""):
         log.exception("sub update")
 
 
+def _load_cache_from_disk():
+    """بازیابی کش از دیسک برای دورهای بعدی."""
+    path = "tester_cache.json"
+    if not os.path.exists(path):
+        return 0
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        items = data.get("good", [])
+        n = 0
+        for c in items:
+            if isinstance(c, dict) and c.get("fp") and c.get("deep"):
+                CACHE[c["fp"]] = {"at": time.time(), "data": c}
+                n += 1
+        log.info(f"cache loaded from disk: {n} entries")
+        return n
+    except Exception as e:
+        log.warning(f"cache load: {e}")
+        return 0
+
+
+def _save_cache_to_disk():
+    """ذخیره کش روی دیسک برای استفاده بعدی."""
+    path = "tester_cache.json"
+    try:
+        with _CLOCK:
+            items = [v["data"] for v in CACHE.values()
+                     if isinstance(v, dict) and v.get("data", {}).get("deep")]
+        with open(path, "w") as f:
+            json.dump({"good": items, "at": datetime.now().isoformat()}, f)
+        log.info(f"cache saved: {len(items)} entries")
+    except Exception as e:
+        log.warning(f"cache save: {e}")
+
+
 def cycle(n_tcp, n_deep, label):
     uris = fetch_all()
     uniq = list(dict.fromkeys(uris))
@@ -717,14 +769,13 @@ def cycle(n_tcp, n_deep, label):
     with LOCK:
         seed = list(S["good"])
     total = len(parsed)
-    log.info(f"[{label}] total: {total} | seed: {len(seed)} | xray: {S['xray']}")
+    n_cached = sum(1 for c in parsed if c["fp"] in cached_fps)
+    log.info(f"[{label}] total: {total} | seed: {len(seed)} | cached: {n_cached} | xray: {S['xray']}")
 
-    # ── Phase 1: TCP test on ALL configs ──
     log.info(f"[{label}] ═══ Phase 1: TCP test on all {total} ═══")
     snap = tcp_stage_all(parsed, label)
     log.info(f"[{label}] Phase 1 done: TCP passed {len(snap)}/{total}")
 
-    # ── Phase 2: Deep test in waves, update sub after each wave ──
     if S["xray"] and snap:
         cands = snap[:n_deep]
         n_waves = (len(cands) + WAVE - 1) // WAVE
@@ -741,14 +792,18 @@ def cycle(n_tcp, n_deep, label):
             with LOCK:
                 alive = len(S["good"])
             log.info(f"[{label}] wave {i//WAVE + 1}/{n_waves}: alive {alive}")
-            _update_sub_now(label, f"wave {i//WAVE + 1}/{n_waves}:")
+            if (i // WAVE) % 2 == 1:
+                _update_sub_now(label, f"wave {i//WAVE + 1}/{n_waves}:")
         log.info(f"[{label}] Phase 2 done: final alive {len(S['good'])}")
     else:
         log.warning(f"[{label}] Phase 2 skipped: xray={S['xray']} snap={len(snap)}")
 
+    _save_cache_to_disk()
+
 
 def refresh_loop():
     S["xray"] = ensure_xray()
+    _load_cache_from_disk()
     log.info(f"engine v10 started — xray={S['xray']}")
     first = True
     while True:
@@ -760,7 +815,7 @@ def refresh_loop():
         except Exception:
             log.exception("cycle")
         _update_sub_now("final")
-        log.info(f"⏰ waiting {REFRESH_EVERY}s ({REFRESH_EVERY//60} min)")
+        log.info(f"⏰ waiting {REFRESH_EVERY}s before next cycle")
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
 
