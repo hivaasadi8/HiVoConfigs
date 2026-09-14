@@ -14,27 +14,26 @@ import signal
 
 from store import STORE
 
-TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2"))
+TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2.5"))
 MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "30000"))
 QUICK_N = int(os.environ.get("QUICK_N", "15000"))
-DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "5000"))
-DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "5000"))
+DEEP_QUICK = int(os.environ.get("DEEP_QUICK", "1500"))
+DEEP_LIMIT = int(os.environ.get("DEEP_LIMIT", "1500"))
 WAVE = int(os.environ.get("WAVE", "100"))
-WORKERS = int(os.environ.get("TCP_WORKERS", "600"))
-DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "100"))
-DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "5"))
+WORKERS = int(os.environ.get("TCP_WORKERS", "500"))
+DEEP_WORKERS = int(os.environ.get("DEEP_WORKERS", "60"))
+DEEP_TIMEOUT = float(os.environ.get("DEEP_TIMEOUT", "6"))
 SPEED_BYTES = int(os.environ.get("SPEED_BYTES", "131072"))
-REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "60"))
+REFRESH_EVERY = int(os.environ.get("REFRESH_EVERY", "900"))
 SUB_LIMIT = int(os.environ.get("SUB_LIMIT", "500"))
 XRAY_VERSION = os.environ.get("XRAY_VERSION", "latest")
 XRAY_MIN_SIZE = int(os.environ.get("XRAY_MIN_SIZE", "5000000"))
-CACHE_TTL = int(os.environ.get("CACHE_TTL", "86400"))
-MAX_CACHE = int(os.environ.get("MAX_CACHE", "50000"))
+CACHE_TTL = int(os.environ.get("CACHE_TTL", "900"))
+MAX_CACHE = int(os.environ.get("MAX_CACHE", "20000"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("hivo.core")
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 S = {"good": [], "tcp": 0, "fetched": 0, "tested": 0, "last": None,
      "xray": False, "sub": None, "fast": 0}
@@ -182,8 +181,8 @@ def _safe_fetch(url):
             h["fail"] += 1
             if h["fail"] >= 3:
                 h["cooldown_until"] = time.time() + 1800
-                log.warning(f"source cooldown: {url.rsplit('/', 1)[-1]}")
-        log.warning(f"src: {e}")
+                log.warning("source cooldown: " + url.rsplit("/", 1)[-1])
+        log.warning("src: " + str(e))
         return None
 
 
@@ -266,7 +265,7 @@ def ensure_xray():
         if latest and latest not in urls:
             urls.append(latest)
     except Exception as e:
-        log.warning(f"xray release lookup: {e}")
+        log.warning("xray release lookup: " + str(e))
 
     for url in urls:
         try:
@@ -281,10 +280,10 @@ def ensure_xray():
                 log.warning("xray integrity check failed")
                 continue
             XRAY_BIN = local
-            log.info(f"xray ready ✅ version={XRAY_VERSION}")
+            log.info("xray ready ✅ version=" + XRAY_VERSION)
             return True
         except Exception as e:
-            log.warning(f"xray: {e}")
+            log.warning("xray: " + str(e))
     log.error("❌ XRAY FAILED TO LOAD — deep tests will not run!")
     return False
 
@@ -427,7 +426,7 @@ def _socks_speed(port):
         ctx.verify_mode = ssl.CERT_NONE
         raw.connect(("speed.cloudflare.com", 443))
         s = ctx.wrap_socket(raw, server_hostname="speed.cloudflare.com")
-        s.sendall(f"GET /__down?bytes={SPEED_BYTES} HTTP/1.1\r\nHost: speed.cloudflare.com\r\nConnection: close\r\n\r\n".encode())
+        s.sendall(("GET /__down?bytes=" + str(SPEED_BYTES) + " HTTP/1.1\r\nHost: speed.cloudflare.com\r\nConnection: close\r\n\r\n").encode())
         buf = b""
         while b"\r\n\r\n" not in buf:
             chunk = s.recv(4096)
@@ -593,16 +592,16 @@ def geo_batch(items):
 
 
 def export_uri(c):
-    name = f"HiVo ⭐{c.get('score', 0)}"
+    name = "HiVo ⭐" + str(c.get("score", 0))
     if c.get("flag"):
-        name += f" {c['flag']}"
+        name += " " + c["flag"]
     if c.get("country"):
-        name += f" {c['country']}"
+        name += " " + c["country"]
     if c.get("city"):
-        name += f" | {c['city']}"
-    name += f" | {c['latency']}ms"
+        name += " | " + c["city"]
+    name += " | " + str(c["latency"]) + "ms"
     if c.get("speed"):
-        name += f" | {c['speed']}MBs"
+        name += " | " + str(c["speed"]) + "MBs"
     uri = c["uri"]
     if uri.lower().startswith("vmess://"):
         try:
@@ -636,7 +635,8 @@ def publish(alive):
     alive = [c for c in dedup(alive) if c.get("deep")]
     if not alive:
         return
-    alive.sort(key=lambda c: (-c.get("score", 0), c["latency"], -c.get("speed", 0)))
+    # FIX: speed ممکنه None باشه، پس (c.get("speed") or 0)
+    alive.sort(key=lambda c: (-c.get("score", 0), c["latency"], -(c.get("speed") or 0)))
     with LOCK:
         S["good"] = alive
         S["fast"] = sum(1 for c in alive if c.get("speed"))
@@ -666,7 +666,8 @@ def tcp_stage_all(cands, label):
         with LOCK:
             S["tested"] = i + len(chunk)
             S["tcp"] = len(survivors)
-        log.info(f"[{label}] TCP {i+len(chunk)}/{total} tested | passed {len(survivors)}")
+        log.info("[" + label + "] TCP " + str(i + len(chunk)) + "/" + str(total)
+                 + " tested | passed " + str(len(survivors)))
     snap = dedup(survivors)
     snap.sort(key=lambda c: c["latency"])
     publish_tcp(snap)
@@ -678,8 +679,8 @@ def upload_sub(text):
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not repo:
         return None
-    api = f"https://api.github.com/repos/{repo}/contents/sub.txt"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    api = "https://api.github.com/repos/" + repo + "/contents/sub.txt"
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"}
     try:
         r = requests.get(api, headers=headers, timeout=30)
         sha = r.json().get("sha") if r.status_code == 200 else None
@@ -688,9 +689,9 @@ def upload_sub(text):
             body["sha"] = sha
         r2 = requests.put(api, headers=headers, json=body, timeout=30)
         if r2.status_code in (200, 201):
-            return f"https://raw.githubusercontent.com/{repo}/main/sub.txt"
+            return "https://raw.githubusercontent.com/" + repo + "/main/sub.txt"
     except Exception as e:
-        log.warning(f"sub up: {e}")
+        log.warning("sub up: " + str(e))
     return None
 
 
@@ -703,44 +704,9 @@ def _update_sub_now(label, info=""):
         url = upload_sub("\n".join(export_uri(c) for c in good))
         with LOCK:
             S["sub"] = url
-        log.info(f"[{label}] {info} sub updated → {len(good)} alive")
+        log.info("[" + label + "] " + info + " sub updated → " + str(len(good)) + " alive")
     except Exception:
         log.exception("sub update")
-
-
-def _load_cache_from_disk():
-    """بازیابی کش از دیسک برای دورهای بعدی."""
-    path = "tester_cache.json"
-    if not os.path.exists(path):
-        return 0
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-        items = data.get("good", [])
-        n = 0
-        for c in items:
-            if isinstance(c, dict) and c.get("fp") and c.get("deep"):
-                CACHE[c["fp"]] = {"at": time.time(), "data": c}
-                n += 1
-        log.info(f"cache loaded from disk: {n} entries")
-        return n
-    except Exception as e:
-        log.warning(f"cache load: {e}")
-        return 0
-
-
-def _save_cache_to_disk():
-    """ذخیره کش روی دیسک برای استفاده بعدی."""
-    path = "tester_cache.json"
-    try:
-        with _CLOCK:
-            items = [v["data"] for v in CACHE.values()
-                     if isinstance(v, dict) and v.get("data", {}).get("deep")]
-        with open(path, "w") as f:
-            json.dump({"good": items, "at": datetime.now().isoformat()}, f)
-        log.info(f"cache saved: {len(items)} entries")
-    except Exception as e:
-        log.warning(f"cache save: {e}")
 
 
 def cycle(n_tcp, n_deep, label):
@@ -769,17 +735,19 @@ def cycle(n_tcp, n_deep, label):
     with LOCK:
         seed = list(S["good"])
     total = len(parsed)
-    n_cached = sum(1 for c in parsed if c["fp"] in cached_fps)
-    log.info(f"[{label}] total: {total} | seed: {len(seed)} | cached: {n_cached} | xray: {S['xray']}")
+    n_batches = (total + 1000 - 1) // 1000
+    log.info("[" + label + "] total: " + str(total) + " | seed: " + str(len(seed))
+             + " | xray: " + str(S["xray"]))
 
-    log.info(f"[{label}] ═══ Phase 1: TCP test on all {total} ═══")
+    log.info("[" + label + "] ═══ Phase 1: TCP test on all " + str(total) + " ═══")
     snap = tcp_stage_all(parsed, label)
-    log.info(f"[{label}] Phase 1 done: TCP passed {len(snap)}/{total}")
+    log.info("[" + label + "] Phase 1 done: TCP passed " + str(len(snap)) + "/" + str(total))
 
     if S["xray"] and snap:
         cands = snap[:n_deep]
         n_waves = (len(cands) + WAVE - 1) // WAVE
-        log.info(f"[{label}] ═══ Phase 2: deep on {len(cands)} in {n_waves} waves of {WAVE} ═══")
+        log.info("[" + label + "] ═══ Phase 2: deep on " + str(len(cands))
+                 + " in " + str(n_waves) + " waves of " + str(WAVE) + " ═══")
         deep_all = list(seed)
         for i in range(0, len(cands), WAVE):
             wave = cands[i:i + WAVE]
@@ -791,20 +759,19 @@ def cycle(n_tcp, n_deep, label):
             publish(dedup(deep_all))
             with LOCK:
                 alive = len(S["good"])
-            log.info(f"[{label}] wave {i//WAVE + 1}/{n_waves}: alive {alive}")
+            log.info("[" + label + "] wave " + str(i // WAVE + 1) + "/"
+                     + str(n_waves) + ": alive " + str(alive))
             if (i // WAVE) % 2 == 1:
-                _update_sub_now(label, f"wave {i//WAVE + 1}/{n_waves}:")
-        log.info(f"[{label}] Phase 2 done: final alive {len(S['good'])}")
+                _update_sub_now(label, "wave " + str(i // WAVE + 1) + "/" + str(n_waves) + ":")
+        log.info("[" + label + "] Phase 2 done: final alive " + str(len(S["good"])))
     else:
-        log.warning(f"[{label}] Phase 2 skipped: xray={S['xray']} snap={len(snap)}")
-
-    _save_cache_to_disk()
+        log.warning("[" + label + "] Phase 2 skipped: xray=" + str(S["xray"])
+                    + " snap=" + str(len(snap)))
 
 
 def refresh_loop():
     S["xray"] = ensure_xray()
-    _load_cache_from_disk()
-    log.info(f"engine v10 started — xray={S['xray']}")
+    log.info("engine v10 started — xray=" + str(S["xray"]))
     first = True
     while True:
         try:
@@ -815,7 +782,7 @@ def refresh_loop():
         except Exception:
             log.exception("cycle")
         _update_sub_now("final")
-        log.info(f"⏰ waiting {REFRESH_EVERY}s before next cycle")
+        log.info("⏰ waiting " + str(REFRESH_EVERY) + "s before next cycle")
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
 
