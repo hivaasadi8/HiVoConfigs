@@ -2,98 +2,796 @@
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>HiVo Configs</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0a0f">
+<title>HiVo Configs — داشبورد کانفیگ‌ها</title>
 <style>
-  *{box-sizing:border-box}
-  body{font-family:system-ui,Tahoma,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:20px;max-width:820px;margin:0 auto;min-height:100vh}
-  h1{font-size:1.5rem;margin:0 0 8px}
-  #status{opacity:.75;margin:0 0 18px;font-size:.9rem}
-  .bar{display:flex;gap:8px;margin-bottom:14px}
-  .bar input{flex:1;background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:10px;border-radius:8px;font-size:.9rem}
-  .sub-list{list-style:none;padding:0;margin:0}
-  .sub-list li{background:#161b22;border:1px solid #30363d;padding:12px;border-radius:8px;margin-bottom:8px}
-  .row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-  .proto{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:600}
-  .vmess{background:#8957e5;color:#fff}
-  .vless{background:#1f6feb;color:#fff}
-  .trojan{background:#da3633;color:#fff}
-  .ss{background:#d29922;color:#000}
-  .idx{opacity:.55;font-size:.8rem}
-  button{background:#238636;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:.8rem;margin-right:auto}
-  button:hover{background:#2ea043}
-  button:active{transform:scale(.97)}
-  .line{font-size:.75rem;opacity:.55;word-break:break-all;line-height:1.5;max-height:60px;overflow:hidden}
+  /* ══════════════════════════════════════════
+     Design Tokens
+     ══════════════════════════════════════════ */
+  :root {
+    --bg-0: #0a0a0f;
+    --bg-1: #0e0e15;
+    --bg-2: #13131c;
+    --bg-3: #1a1a25;
+    --border: rgba(255, 255, 255, 0.06);
+    --border-strong: rgba(255, 255, 255, 0.1);
+    --text-1: #f5f5f7;
+    --text-2: #a1a1aa;
+    --text-3: #71717a;
+    --accent: #6366f1;
+    --accent-2: #8b5cf6;
+    --accent-glow: rgba(99, 102, 241, 0.35);
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --proto-vmess: #8b5cf6;
+    --proto-vless: #3b82f6;
+    --proto-trojan: #ef4444;
+    --proto-ss: #f59e0b;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 24px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+    --shadow-lg: 0 12px 40px rgba(0,0,0,0.5);
+    --shadow-glow: 0 0 40px var(--accent-glow);
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif;
+    background: var(--bg-0);
+    color: var(--text-1);
+    min-height: 100vh;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  /* ── Ambient Background ── */
+  .bg-ambient {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    background: var(--bg-0);
+  }
+  .bg-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.5;
+    will-change: transform;
+    animation: float 20s ease-in-out infinite;
+  }
+  .bg-blob-1 { width: 500px; height: 500px; background: #6366f1; top: -200px; left: -100px; animation-delay: 0s; }
+  .bg-blob-2 { width: 400px; height: 400px; background: #8b5cf6; bottom: -150px; right: -100px; animation-delay: -7s; }
+  .bg-blob-3 { width: 350px; height: 350px; background: #06b6d4; top: 40%; left: 50%; animation-delay: -14s; opacity: 0.3; }
+
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(50px, -50px) scale(1.1); }
+    66% { transform: translate(-30px, 30px) scale(0.95); }
+  }
+
+  /* ── Grid Pattern Overlay ── */
+  .bg-grid {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 50px 50px;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+    -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+  }
+
+  /* ══════════════════════════════════════════
+     Layout
+     ══════════════════════════════════════════ */
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: clamp(20px, 4vw, 48px) clamp(16px, 3vw, 24px);
+  }
+
+  /* ══════════════════════════════════════════
+     Header
+     ══════════════════════════════════════════ */
+  .header {
+    text-align: center;
+    margin-bottom: clamp(32px, 6vw, 56px);
+    animation: fadeUp 0.8s var(--ease-out) both;
+  }
+  .logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    border-radius: var(--radius-lg);
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: var(--shadow-glow);
+    margin-bottom: 20px;
+    font-size: 28px;
+    animation: floaty 4s ease-in-out infinite;
+  }
+  @keyframes floaty {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+  .header h1 {
+    font-size: clamp(28px, 5vw, 40px);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #fff 0%, #a1a1aa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .header .subtitle {
+    color: var(--text-2);
+    font-size: clamp(14px, 2vw, 16px);
+    font-weight: 400;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+
+  /* ══════════════════════════════════════════
+     Stats Bar
+     ══════════════════════════════════════════ */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+    animation: fadeUp 0.8s var(--ease-out) 0.1s both;
+  }
+  .stat-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 18px 16px;
+    text-align: center;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: transform 0.3s var(--ease-out), border-color 0.3s;
+  }
+  .stat-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+  }
+  .stat-value {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    color: var(--text-1);
+  }
+  .stat-value.accent { color: var(--accent); }
+  .stat-value.success { color: var(--success); }
+  .stat-label {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 4px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* ══════════════════════════════════════════
+     Toolbar
+     ══════════════════════════════════════════ */
+  .toolbar {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+    animation: fadeUp 0.8s var(--ease-out) 0.2s both;
+  }
+  .search-wrap {
+    position: relative;
+    flex: 1;
+  }
+  .search-wrap svg {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
+    color: var(--text-3);
+    pointer-events: none;
+  }
+  .search-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 44px 12px 16px;
+    color: var(--text-1);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .search-input::placeholder { color: var(--text-3); }
+  .search-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  }
+  .refresh-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 20px;
+    color: var(--text-1);
+    font-size: 14px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: all 0.2s;
+  }
+  .refresh-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-strong);
+  }
+  .refresh-btn:active { transform: scale(0.97); }
+  .refresh-btn svg { width: 16px; height: 16px; transition: transform 0.6s var(--ease-out); }
+  .refresh-btn.loading svg { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ══════════════════════════════════════════
+     Config List
+     ══════════════════════════════════════════ */
+  .list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .item {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: transform 0.2s var(--ease-out), border-color 0.2s, background 0.2s;
+    animation: fadeUp 0.4s var(--ease-out) both;
+    will-change: transform;
+  }
+  .item:hover {
+    transform: translateY(-1px);
+    border-color: var(--border-strong);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .item .proto {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    min-width: 56px;
+  }
+  .proto.vmess { background: rgba(139, 92, 246, 0.15); color: var(--proto-vmess); border: 1px solid rgba(139, 92, 246, 0.3); }
+  .proto.vless { background: rgba(59, 130, 246, 0.15); color: var(--proto-vless); border: 1px solid rgba(59, 130, 246, 0.3); }
+  .proto.trojan { background: rgba(239, 68, 68, 0.15); color: var(--proto-trojan); border: 1px solid rgba(239, 68, 68, 0.3); }
+  .proto.ss { background: rgba(245, 158, 11, 0.15); color: var(--proto-ss); border: 1px solid rgba(245, 158, 11, 0.3); }
+  .proto.other { background: rgba(255,255,255,0.05); color: var(--text-2); border: 1px solid var(--border); }
+
+  .item .idx {
+    font-size: 12px;
+    color: var(--text-3);
+    font-weight: 600;
+    min-width: 28px;
+    font-variant-numeric: tabular-nums;
+  }
+  .item .meta {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .item .uri {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 11px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: ltr;
+    text-align: left;
+  }
+  .item .uri a {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .item .uri a:hover { color: var(--accent); }
+
+  .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s;
+  }
+  .copy-btn:hover {
+    background: rgba(99, 102, 241, 0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .copy-btn:active { transform: scale(0.92); }
+  .copy-btn.copied {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: var(--success);
+    color: var(--success);
+  }
+  .copy-btn svg { width: 16px; height: 16px; }
+
+  /* ── Skeleton Loading ── */
+  .skeleton {
+    background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: var(--radius-md);
+    height: 66px;
+    margin-bottom: 8px;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* ── Empty / Error States ── */
+  .state {
+    text-align: center;
+    padding: 64px 24px;
+    animation: fadeUp 0.5s var(--ease-out) both;
+  }
+  .state-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.6;
+  }
+  .state-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-1);
+  }
+  .state-desc {
+    font-size: 14px;
+    color: var(--text-3);
+    max-width: 360px;
+    margin: 0 auto;
+  }
+
+  /* ══════════════════════════════════════════
+     Footer
+     ══════════════════════════════════════════ */
+  .footer {
+    text-align: center;
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-3);
+    font-size: 12px;
+    animation: fadeUp 0.8s var(--ease-out) 0.4s both;
+  }
+  .footer a { color: var(--text-2); text-decoration: none; transition: color 0.2s; }
+  .footer a:hover { color: var(--accent); }
+
+  /* ══════════════════════════════════════════
+     Animations
+     ══════════════════════════════════════════ */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ══════════════════════════════════════════
+     Responsive
+     ══════════════════════════════════════════ */
+  @media (max-width: 640px) {
+    .item { padding: 12px 12px; gap: 8px; }
+    .item .proto { min-width: 48px; padding: 3px 8px; font-size: 9px; }
+    .item .idx { min-width: 22px; font-size: 11px; }
+    .copy-btn { width: 32px; height: 32px; }
+    .toolbar { flex-direction: column; }
+  }
+
+  /* ── Reduced Motion ── */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-0); }
+  ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 </style>
 </head>
 <body>
-<h1>⚡️ HiVo Configs</h1>
-<p id="status">در حال بارگذاری…</p>
-<div class="bar">
-  <input id="q" placeholder="🔍 جستجو در کانفیگ‌ها…">
+
+<!-- Ambient Background -->
+<div class="bg-ambient">
+  <div class="bg-blob bg-blob-1"></div>
+  <div class="bg-blob bg-blob-2"></div>
+  <div class="bg-blob bg-blob-3"></div>
 </div>
-<ul class="sub-list" id="list"></ul>
+<div class="bg-grid"></div>
+
+<main class="container">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">⚡</div>
+    <h1>HiVo Configs</h1>
+    <p class="subtitle">کانفیگ‌های تست‌شده با تونل واقعی — همیشه تازه</p>
+  </header>
+
+  <!-- Stats -->
+  <section class="stats" id="stats" hidden>
+    <div class="stat-card">
+      <div class="stat-value accent" id="statTotal">—</div>
+      <div class="stat-label">کل کانفیگ</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value success" id="statAlive">—</div>
+      <div class="stat-label">زنده</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="statProtocols">—</div>
+      <div class="stat-label">پروتکل</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="statUpdated">—</div>
+      <div class="stat-label">آخرین بروزرسانی</div>
+    </div>
+  </section>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+      </svg>
+      <input type="search" class="search-input" id="search" placeholder="جستجو در کانفیگ‌ها…" aria-label="جستجو" disabled>
+    </div>
+    <button class="refresh-btn" id="refresh" aria-label="بروزرسانی">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+        <path d="M21 3v5h-5"/>
+      </svg>
+      بروزرسانی
+    </button>
+  </div>
+
+  <!-- Loading Skeletons -->
+  <div id="loading" class="list">
+    <div class="skeleton"></div>
+    <div class="skeleton"></div>
+    <div class="skeleton"></div>
+    <div class="skeleton"></div>
+    <div class="skeleton"></div>
+  </div>
+
+  <!-- Config List -->
+  <ul class="list" id="list" hidden></ul>
+
+  <!-- Empty/Error State -->
+  <div class="state" id="state" hidden>
+    <div class="state-icon" id="stateIcon">🌐</div>
+    <div class="state-title" id="stateTitle">در حال بارگذاری…</div>
+    <div class="state-desc" id="stateDesc"></div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>ساخته شده با ❤️ توسط <a href="https://github.com/hivaasadi8" target="_blank" rel="noopener">hivaasadi8</a></p>
+    <p style="margin-top: 6px; opacity: 0.6;">آخرین بروزرسانی: <span id="footerTime">—</span></p>
+  </footer>
+
+</main>
 
 <script>
-const SUB_URLS = [
-  './sub.txt',
-  'https://raw.githubusercontent.com/hivaasadi8/HiVoConfigs/main/sub.txt',
-  'https://cdn.jsdelivr.net/gh/hivaasadi8/HiVoConfigs@main/sub.txt'
-];
+(() => {
+  'use strict';
 
-const protoOf = u => (u.match(/^([a-z0-9]+):\/\//i) || [, 'other'])[1].toLowerCase();
+  /* ══════════════════════════════════════════
+     Config
+     ══════════════════════════════════════════ */
+  const SUB_URLS = [
+    './sub.txt',
+    'https://raw.githubusercontent.com/hivaasadi8/HiVoConfigs/main/sub.txt',
+    'https://cdn.jsdelivr.net/gh/hivaasadi8/HiVoConfigs@main/sub.txt',
+  ];
 
-async function loadSubs(){
-  for (const u of SUB_URLS){
-    try{
-      const r = await fetch(u + '?t=' + Date.now(), {cache:'no-store'});
-      if(!r.ok) continue;
-      let t = (await r.text()).trim();
-      if(!t.includes('://')){ try{ t = atob(t.replace(/\s+/g,'')); }catch(e){} }
-      const lines = t.split(/\r?\n/).map(x=>x.trim())
-        .filter(x=>/^(vless|vmess|trojan|ss|hysteria2?):\/\//i.test(x));
-      if(lines.length) return lines;
-    }catch(e){}
+  const PROTO_RE = /^(vless|vmess|trojan|ss|hysteria2?):\/\//i;
+  const PROTO_NAMES = { vmess: 'VMess', vless: 'VLESS', trojan: 'Trojan', ss: 'SS', hysteria2: 'HY2', hysteria: 'HY2' };
+
+  /* ══════════════════════════════════════════
+     DOM Refs
+     ══════════════════════════════════════════ */
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    stats: $('stats'),
+    statTotal: $('statTotal'),
+    statAlive: $('statAlive'),
+    statProtocols: $('statProtocols'),
+    statUpdated: $('statUpdated'),
+    search: $('search'),
+    refresh: $('refresh'),
+    loading: $('loading'),
+    list: $('list'),
+    state: $('state'),
+    stateIcon: $('stateIcon'),
+    stateTitle: $('stateTitle'),
+    stateDesc: $('stateDesc'),
+    footerTime: $('footerTime'),
+  };
+
+  /* ══════════════════════════════════════════
+     State
+     ══════════════════════════════════════════ */
+  let ALL = [];
+  let FILTERED = [];
+  let isLoading = false;
+
+  /* ══════════════════════════════════════════
+     Helpers
+     ══════════════════════════════════════════ */
+  const protoOf = (uri) => {
+    const m = uri.match(PROTO_RE);
+    return m ? m[1].toLowerCase().replace('hysteria2', 'hy2').replace('hysteria', 'hy2') : 'other';
+  };
+
+  const escapeHtml = (str) => str.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+
+  const timeAgo = (date) => {
+    const s = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (s < 60) return 'همین حالا';
+    if (s < 3600) return `${Math.floor(s / 60)} دقیقه پیش`;
+    if (s < 86400) return `${Math.floor(s / 3600)} ساعت پیش`;
+    return `${Math.floor(s / 86400)} روز پیش`;
+  };
+
+  const showState = (icon, title, desc) => {
+    els.loading.hidden = true;
+    els.list.hidden = true;
+    els.stats.hidden = true;
+    els.state.hidden = false;
+    els.stateIcon.textContent = icon;
+    els.stateTitle.textContent = title;
+    els.stateDesc.textContent = desc || '';
+  };
+
+  const showList = () => {
+    els.loading.hidden = true;
+    els.state.hidden = true;
+    els.list.hidden = false;
+    els.stats.hidden = false;
+  };
+
+  /* ══════════════════════════════════════════
+     Render
+     ══════════════════════════════════════════ */
+  function render(items) {
+    if (!items.length) {
+      showState('🔍', 'چیزی پیدا نشد', 'عبارت جستجو رو تغییر بده یا فیلترها رو پاک کن.');
+      return;
+    }
+
+    showList();
+
+    const frag = document.createDocumentFragment();
+    items.forEach((uri, i) => {
+      const proto = protoOf(uri);
+      const li = document.createElement('li');
+      li.className = 'item';
+      li.style.animationDelay = `${Math.min(i * 15, 300)}ms`;
+
+      const safe = escapeHtml(uri.length > 120 ? uri.slice(0, 120) + '…' : uri);
+      const display = escapeHtml(uri);
+
+      li.innerHTML = `
+        <span class="proto ${proto}">${PROTO_NAMES[proto] || proto.toUpperCase()}</span>
+        <span class="idx">${i + 1}</span>
+        <div class="meta">
+          <div class="uri" title="${safe}"><a href="${display}" target="_blank" rel="noopener">${safe}</a></div>
+        </div>
+        <button class="copy-btn" type="button" aria-label="کپی" data-copy="${display}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+            <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+          </svg>
+        </button>
+      `;
+
+      frag.appendChild(li);
+    });
+
+    els.list.innerHTML = '';
+    els.list.appendChild(frag);
+
+    // Copy handlers (event delegation)
+    els.list.querySelectorAll('.copy-btn').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const text = btn.getAttribute('data-copy');
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.classList.add('copied');
+          btn.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6 9 17l-5-5"/>
+            </svg>
+          `;
+          setTimeout(() => {
+            btn.classList.remove('copied');
+            btn.innerHTML = `
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+              </svg>
+            `;
+          }, 1500);
+        } catch {
+          // Fallback
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        }
+      });
+    });
   }
-  throw new Error('sub.txt در دسترس نیست');
-}
 
-let ALL = [];
-function render(lines){
-  const list = document.getElementById('list');
-  const status = document.getElementById('status');
-  status.textContent = lines.length + ' کانفیگ فعال';
-  list.innerHTML = '';
-  lines.forEach((line,i)=>{
-    const p = protoOf(line);
-    const safe = line.length > 140 ? line.substring(0,140)+'…' : line;
-    const li = document.createElement('li');
-    li.innerHTML =
-      '<div class="row">' +
-        '<span class="proto '+p+'">'+p.toUpperCase()+'</span>' +
-        '<span class="idx">#'+(i+1)+'</span>' +
-        '<button>کپی</button>' +
-      '</div>' +
-      '<div class="line">'+safe.replace(/[<>]/g,'')+'</div>';
-    li.querySelector('button').onclick = (ev)=>{
-      navigator.clipboard.writeText(line);
-      ev.target.textContent = '✓ کپی شد';
-      setTimeout(()=>ev.target.textContent='کپی',1200);
-    };
-    list.appendChild(li);
-  });
-}
+  /* ══════════════════════════════════════════
+     Stats
+     ══════════════════════════════════════════ */
+  function updateStats() {
+    const protos = new Set();
+    ALL.forEach((u) => protos.add(protoOf(u)));
 
-document.getElementById('q').oninput = (e)=>{
-  const q = e.target.value.trim().toLowerCase();
-  if(!q){ render(ALL); return; }
-  const filtered = ALL.filter(l=>l.toLowerCase().includes(q));
-  render(filtered);
-};
+    els.statTotal.textContent = ALL.length.toLocaleString('en-US');
+    els.statAlive.textContent = FILTERED.length.toLocaleString('en-US');
+    els.statProtocols.textContent = protos.size;
+    els.statUpdated.textContent = timeAgo(new Date());
+  }
 
-loadSubs().then(l=>{ALL=l;render(l);}).catch(e=>{
-  document.getElementById('status').textContent = '⚠️ ' + e.message;
-});
+  /* ══════════════════════════════════════════
+     Search
+     ══════════════════════════════════════════ */
+  function applyFilter() {
+    const q = els.search.value.trim().toLowerCase();
+    if (!q) {
+      FILTERED = ALL.slice();
+    } else {
+      FILTERED = ALL.filter((u) => u.toLowerCase().includes(q));
+    }
+    render(FILTERED);
+    updateStats();
+  }
+
+  /* ══════════════════════════════════════════
+     Load
+     ══════════════════════════════════════════ */
+  async function loadSub() {
+    if (isLoading) return;
+    isLoading = true;
+    els.refresh.classList.add('loading');
+    els.search.disabled = true;
+
+    // Reset UI
+    els.list.hidden = true;
+    els.stats.hidden = true;
+    els.state.hidden = true;
+    els.loading.hidden = false;
+
+    let found = false;
+
+    for (const url of SUB_URLS) {
+      try {
+        const res = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) continue;
+
+        let text = (await res.text()).trim();
+        if (!text) continue;
+
+        // Base64 fallback
+        if (!text.includes('://')) {
+          try {
+            text = atob(text.replace(/\s+/g, ''));
+          } catch {}
+        }
+
+        const lines = text
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => PROTO_RE.test(l));
+
+        if (lines.length) {
+          ALL = lines;
+          FILTERED = lines.slice();
+          found = true;
+          els.search.disabled = false;
+          render(FILTERED);
+          updateStats();
+          els.footerTime.textContent = new Date().toLocaleString('fa-IR');
+          break;
+        }
+      } catch {
+        // Try next URL
+      }
+    }
+
+    isLoading = false;
+    els.refresh.classList.remove('loading');
+
+    if (!found) {
+      showState('⚠️', 'اتصال برقرار نشد', 'هیچ‌کدام از منابع سابسکرایبشن در دسترس نیستن. اتصال اینترنت رو چک کن یا چند دقیقه دیگه دوباره امتحان کن.');
+    }
+  }
+
+  /* ══════════════════════════════════════════
+     Events
+     ══════════════════════════════════════════ */
+  els.search.addEventListener('input', applyFilter);
+  els.refresh.addEventListener('click', loadSub);
+
+  // Auto-refresh every 5 minutes
+  setInterval(() => {
+    if (!document.hidden) loadSub();
+  }, 5 * 60 * 1000);
+
+  // Initial load
+  loadSub();
+
+})();
 </script>
 </body>
 </html>
