@@ -14,6 +14,76 @@ import signal
 
 from store import STORE
 
+# ══════════════════════════════════════════
+#  GitHub Actions Pretty Logger
+# ══════════════════════════════════════════
+
+GH_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
+SUMMARY_FILE = os.environ.get("GITHUB_STEP_SUMMARY", "")
+
+# ANSI colors (کار میکنه تو گیت‌هاب لاگ)
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_RED = "\033[31m"
+C_GREEN = "\033[32m"
+C_YELLOW = "\033[33m"
+C_BLUE = "\033[34m"
+C_MAGENTA = "\033[35m"
+C_CYAN = "\033[36m"
+
+
+def gh_group(title):
+    """شروع یه گروه جمع‌شو تو گیت‌هاب"""
+    if GH_ACTIONS:
+        print("::group::" + title, flush=True)
+
+
+def gh_endgroup():
+    if GH_ACTIONS:
+        print("::endgroup::", flush=True)
+
+
+def gh_warning(msg):
+    if GH_ACTIONS:
+        print("::warning::" + str(msg), flush=True)
+
+
+def gh_error(msg):
+    if GH_ACTIONS:
+        print("::error::" + str(msg), flush=True)
+
+
+def gh_notice(msg):
+    if GH_ACTIONS:
+        print("::notice::" + str(msg), flush=True)
+
+
+def banner(title, char="═", width=60):
+    """یه بنر زیبا"""
+    line = char * width
+    print("", flush=True)
+    print(C_BOLD + C_CYAN + line + C_RESET, flush=True)
+    print(C_BOLD + C_CYAN + "  " + title + C_RESET, flush=True)
+    print(C_BOLD + C_CYAN + line + C_RESET, flush=True)
+    print("", flush=True)
+
+
+def write_summary(lines):
+    """اضافه کردن به پنل بالای اجرا"""
+    if not SUMMARY_FILE:
+        return
+    try:
+        with open(SUMMARY_FILE, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════
+#  Config
+# ══════════════════════════════════════════
+
 TCP_TIMEOUT = float(os.environ.get("TCP_TIMEOUT", "2.5"))
 MAX_TO_TEST = int(os.environ.get("MAX_TO_TEST", "30000"))
 QUICK_N = int(os.environ.get("QUICK_N", "15000"))
@@ -175,14 +245,18 @@ def _safe_fetch(url):
             h["ok"] += 1
             h["fail"] = 0
             h["last_count"] = len(res)
+        short = url.rsplit("/", 1)[-1][:40]
+        print("  " + C_GREEN + "✓" + C_RESET + " " + short + "  " + C_DIM
+              + str(len(res)) + " کانفیگ" + C_RESET, flush=True)
         return res
     except Exception as e:
         with _HLOCK:
             h["fail"] += 1
             if h["fail"] >= 3:
                 h["cooldown_until"] = time.time() + 1800
-                log.warning("source cooldown: " + url.rsplit("/", 1)[-1])
-        log.warning("src: " + str(e))
+        short = url.rsplit("/", 1)[-1][:40]
+        print("  " + C_RED + "✗" + C_RESET + " " + short + "  " + C_DIM
+              + str(e)[:60] + C_RESET, flush=True)
         return None
 
 
@@ -247,7 +321,7 @@ def ensure_xray():
     local = os.path.abspath("xray")
     if os.path.exists(local) and _verify_xray_binary(local):
         XRAY_BIN = local
-        log.info("xray: reused cached binary ✅")
+        print("  " + C_GREEN + "✓" + C_RESET + " Xray از کش لود شد", flush=True)
         return True
 
     arch = {"x86_64": "64", "aarch64": "arm64-v8a", "armv7l": "arm32-v7a"}.get(platform.machine(), "64")
@@ -265,26 +339,25 @@ def ensure_xray():
         if latest and latest not in urls:
             urls.append(latest)
     except Exception as e:
-        log.warning("xray release lookup: " + str(e))
+        print("  " + C_YELLOW + "⚠" + C_RESET + " release lookup: " + str(e)[:60], flush=True)
 
     for url in urls:
         try:
             data = requests.get(url, timeout=240).content
             if len(data) < XRAY_MIN_SIZE:
-                log.warning("xray zip too small — skipped")
                 continue
             open("xray.zip", "wb").write(data)
             with zipfile.ZipFile("xray.zip") as z:
                 z.extract("xray")
             if not _verify_xray_binary(local):
-                log.warning("xray integrity check failed")
                 continue
             XRAY_BIN = local
-            log.info("xray ready ✅ version=" + XRAY_VERSION)
+            print("  " + C_GREEN + "✓" + C_RESET + " Xray دانلود شد (" + XRAY_VERSION + ")", flush=True)
             return True
         except Exception as e:
-            log.warning("xray: " + str(e))
-    log.error("❌ XRAY FAILED TO LOAD — deep tests will not run!")
+            print("  " + C_YELLOW + "⚠" + C_RESET + " " + str(e)[:60], flush=True)
+    print("  " + C_RED + "✗ XRAY FAILED TO LOAD" + C_RESET, flush=True)
+    gh_error("Xray نصب نشد — تست تونل کار نمیکنه")
     return False
 
 
@@ -512,7 +585,7 @@ def deep_test(c):
     if out is None:
         return None
     port = _free_port()
-    path = f"/tmp/xt_{port}.json"
+    path = "/tmp/xt_" + str(port) + ".json"
     cfg = {"log": {"loglevel": "none"},
            "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "socks",
                          "settings": {"udp": False}}],
@@ -635,7 +708,6 @@ def publish(alive):
     alive = [c for c in dedup(alive) if c.get("deep")]
     if not alive:
         return
-    # FIX: speed ممکنه None باشه، پس (c.get("speed") or 0)
     alive.sort(key=lambda c: (-c.get("score", 0), c["latency"], -(c.get("speed") or 0)))
     with LOCK:
         S["good"] = alive
@@ -666,8 +738,13 @@ def tcp_stage_all(cands, label):
         with LOCK:
             S["tested"] = i + len(chunk)
             S["tcp"] = len(survivors)
-        log.info("[" + label + "] TCP " + str(i + len(chunk)) + "/" + str(total)
-                 + " tested | passed " + str(len(survivors)))
+        done = i + len(chunk)
+        pct = int(done * 100 / total)
+        bar_filled = int(pct / 5)
+        bar = "█" * bar_filled + "░" * (20 - bar_filled)
+        print("  " + C_CYAN + bar + C_RESET + "  " + C_BOLD + str(pct) + "%" + C_RESET
+              + "  " + C_DIM + "(" + str(done) + "/" + str(total) + ")"
+              + "  ✓ " + str(len(survivors)) + " زنده" + C_RESET, flush=True)
     snap = dedup(survivors)
     snap.sort(key=lambda c: c["latency"])
     publish_tcp(snap)
@@ -691,7 +768,7 @@ def upload_sub(text):
         if r2.status_code in (200, 201):
             return "https://raw.githubusercontent.com/" + repo + "/main/sub.txt"
     except Exception as e:
-        log.warning("sub up: " + str(e))
+        print("  " + C_YELLOW + "⚠ sub upload: " + str(e)[:60] + C_RESET, flush=True)
     return None
 
 
@@ -704,12 +781,73 @@ def _update_sub_now(label, info=""):
         url = upload_sub("\n".join(export_uri(c) for c in good))
         with LOCK:
             S["sub"] = url
-        log.info("[" + label + "] " + info + " sub updated → " + str(len(good)) + " alive")
+        print("  " + C_GREEN + "✓" + C_RESET + " sub updated → " + C_BOLD
+              + str(len(good)) + " زنده" + C_RESET, flush=True)
     except Exception:
         log.exception("sub update")
 
 
+def write_github_summary(label):
+    """پنل بالای اجرا — قشنگ و خلاصه"""
+    with LOCK:
+        good = S["good"]
+        tested = S["tested"]
+        fetched = S["fetched"]
+        xray = S["xray"]
+        sub = S["sub"]
+
+    avg_score = round(sum(c.get("score", 0) for c in good) / len(good)) if good else 0
+    fast_count = sum(1 for c in good if c.get("speed"))
+    countries = len({c.get("country") for c in good if c.get("country")})
+
+    xray_icon = "✅" if xray else "❌"
+    alive_icon = "🟢" if len(good) > 0 else "🔴"
+
+    lines = [
+        "## 📊 HiVo Configs — Run Report",
+        "",
+        "| | |",
+        "|:---|:---|",
+        "| 🔄 دور | **" + label + "** |",
+        "| " + xray_icon + " Xray | `" + str(xray) + "` |",
+        "| 📥 دریافت‌شده | **" + str(fetched) + "** |",
+        "| 🔬 تست TCP | **" + str(tested) + "** |",
+        "| " + alive_icon + " زنده | **" + str(len(good)) + "** |",
+        "| 🚀 سرعت‌سنجی | **" + str(fast_count) + "** |",
+        "| 🌍 کشورها | **" + str(countries) + "** |",
+        "| ⭐ میانگین امتیاز | **" + str(avg_score) + "** |",
+        "| 🔗 ساب | " + ("✅ فعال" if sub else "⏳ در راه") + " |",
+        "| 🕐 زمان | `" + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "` |",
+        "",
+    ]
+
+    if good:
+        lines.append("### 🏆 ۵ برتر")
+        lines.append("")
+        lines.append("| # | کشور | پینگ | سرعت | امتیاز |")
+        lines.append("|:---:|:---:|:---:|:---:|:---:|")
+        for i, c in enumerate(good[:5], 1):
+            flag = c.get("flag", "🌐")
+            country = c.get("country") or "—"
+            sp = (str(c["speed"]) + " MB/s") if c.get("speed") else "—"
+            lines.append("| " + str(i) + " | " + flag + " " + country
+                         + " | " + str(c["latency"]) + "ms"
+                         + " | " + sp
+                         + " | ⭐ " + str(c.get("score", 0)) + " |")
+        lines.append("")
+
+    write_summary(lines)
+
+
 def cycle(n_tcp, n_deep, label):
+    banner("🔄 دور " + label.upper() + " — شروع")
+    t_start = time.time()
+
+    # ── FETCH ──
+    gh_group("📥 دریافت از منابع")
+    print("", flush=True)
+    print(C_BOLD + "📥 دریافت از " + str(len(current_sources())) + " منبع" + C_RESET, flush=True)
+    print("", flush=True)
     uris = fetch_all()
     uniq = list(dict.fromkeys(uris))
     random.shuffle(uniq)
@@ -720,7 +858,13 @@ def cycle(n_tcp, n_deep, label):
     with LOCK:
         S["fetched"] = len(uniq)
         S["tested"] = 0
+    print("", flush=True)
+    print("  " + C_GREEN + "✓" + C_RESET + " کل: " + C_BOLD + str(len(uniq))
+          + C_RESET + " کانفیگ یکتا  " + C_DIM + "(" + str(len(cached_fps))
+          + " تو کش)" + C_RESET, flush=True)
+    gh_endgroup()
 
+    # ── PARSE ──
     seen, parsed = set(), []
     for u in uniq:
         if len(parsed) >= n_tcp:
@@ -735,19 +879,26 @@ def cycle(n_tcp, n_deep, label):
     with LOCK:
         seed = list(S["good"])
     total = len(parsed)
-    n_batches = (total + 1000 - 1) // 1000
-    log.info("[" + label + "] total: " + str(total) + " | seed: " + str(len(seed))
-             + " | xray: " + str(S["xray"]))
 
-    log.info("[" + label + "] ═══ Phase 1: TCP test on all " + str(total) + " ═══")
+    # ── TCP ──
+    gh_group("🔌 فاز ۱ — تست TCP روی " + str(total) + " کانفیگ")
+    print("", flush=True)
+    print(C_BOLD + "🔌 فاز ۱ — تست TCP" + C_RESET, flush=True)
+    print("", flush=True)
     snap = tcp_stage_all(parsed, label)
-    log.info("[" + label + "] Phase 1 done: TCP passed " + str(len(snap)) + "/" + str(total))
+    print("", flush=True)
+    print("  " + C_GREEN + "✓" + C_RESET + " TCP پاس: " + C_BOLD
+          + str(len(snap)) + C_RESET + "/" + str(total), flush=True)
+    gh_endgroup()
 
+    # ── DEEP ──
     if S["xray"] and snap:
         cands = snap[:n_deep]
         n_waves = (len(cands) + WAVE - 1) // WAVE
-        log.info("[" + label + "] ═══ Phase 2: deep on " + str(len(cands))
-                 + " in " + str(n_waves) + " waves of " + str(WAVE) + " ═══")
+        gh_group("🧪 فاز ۲ — تست تونل روی " + str(len(cands)) + " کانفیگ (" + str(n_waves) + " موج)")
+        print("", flush=True)
+        print(C_BOLD + "🧪 فاز ۲ — تست تونل واقعی (Xray)" + C_RESET, flush=True)
+        print("", flush=True)
         deep_all = list(seed)
         for i in range(0, len(cands), WAVE):
             wave = cands[i:i + WAVE]
@@ -759,19 +910,78 @@ def cycle(n_tcp, n_deep, label):
             publish(dedup(deep_all))
             with LOCK:
                 alive = len(S["good"])
-            log.info("[" + label + "] wave " + str(i // WAVE + 1) + "/"
-                     + str(n_waves) + ": alive " + str(alive))
+            wn = i // WAVE + 1
+            pct = int(wn * 100 / n_waves)
+            bar_filled = int(pct / 5)
+            bar = "█" * bar_filled + "░" * (20 - bar_filled)
+            print("  " + C_CYAN + bar + C_RESET + "  " + C_BOLD + str(pct) + "%"
+                  + C_RESET + "  " + C_DIM + "موج " + str(wn) + "/" + str(n_waves)
+                  + C_RESET + "  " + C_GREEN + "🟢 " + str(alive) + " زنده" + C_RESET,
+                  flush=True)
             if (i // WAVE) % 2 == 1:
-                _update_sub_now(label, "wave " + str(i // WAVE + 1) + "/" + str(n_waves) + ":")
-        log.info("[" + label + "] Phase 2 done: final alive " + str(len(S["good"])))
+                _update_sub_now(label, "wave " + str(wn) + ":")
+        print("", flush=True)
+        with LOCK:
+            final_alive = len(S["good"])
+        print("  " + C_GREEN + "✓" + C_RESET + " فاز ۲ تموم شد: " + C_BOLD
+              + str(final_alive) + " زنده" + C_RESET, flush=True)
+        gh_endgroup()
     else:
-        log.warning("[" + label + "] Phase 2 skipped: xray=" + str(S["xray"])
-                    + " snap=" + str(len(snap)))
+        gh_warning("فاز ۲ رد شد: xray=" + str(S["xray"]) + " snap=" + str(len(snap)))
+
+    # ── SUMMARY ──
+    gh_group("📊 خلاصه دور " + label)
+    print("", flush=True)
+    with LOCK:
+        good = list(S["good"])
+        tested = S["tested"]
+        fetched = S["fetched"]
+    avg = round(sum(c.get("score", 0) for c in good) / len(good)) if good else 0
+    fast = sum(1 for c in good if c.get("speed"))
+    countries = len({c.get("country") for c in good if c.get("country")})
+    elapsed = int(time.time() - t_start)
+    mins, secs = divmod(elapsed, 60)
+
+    print(C_BOLD + "📊 خلاصه:" + C_RESET, flush=True)
+    print("   📥 دریافت:      " + C_BOLD + str(fetched) + C_RESET, flush=True)
+    print("   🔬 تست TCP:     " + C_BOLD + str(tested) + C_RESET, flush=True)
+    print("   🟢 زنده:         " + C_BOLD + C_GREEN + str(len(good)) + C_RESET, flush=True)
+    print("   🚀 سرعت‌سنجی:    " + C_BOLD + str(fast) + C_RESET, flush=True)
+    print("   🌍 کشور:        " + C_BOLD + str(countries) + C_RESET, flush=True)
+    print("   ⭐ میانگین:      " + C_BOLD + str(avg) + C_RESET, flush=True)
+    print("   ⏱ زمان:        " + C_BOLD + str(mins) + "m " + str(secs) + "s" + C_RESET, flush=True)
+    print("", flush=True)
+    gh_endgroup()
+
+    # ── GITHUB SUMMARY ──
+    write_github_summary(label)
+
+    banner("✅ دور " + label.upper() + " — پایان  (" + str(mins) + "m " + str(secs) + "s)")
+    gh_notice("دور " + label + " تمام شد — " + str(len(good)) + " کانفیگ زنده")
 
 
 def refresh_loop():
+    banner("🚀 HiVo Configs — شروع")
+    gh_group("🚀 راه‌اندازی")
+    print("", flush=True)
+    print(C_BOLD + "🚀 راه‌اندازی موتور" + C_RESET, flush=True)
+    print("", flush=True)
     S["xray"] = ensure_xray()
-    log.info("engine v10 started — xray=" + str(S["xray"]))
+    print("  " + C_GREEN + "✓" + C_RESET + " موتور آماده  ·  Xray: "
+          + (C_GREEN + "روشن" if S["xray"] else C_RED + "خاموش") + C_RESET, flush=True)
+    print("", flush=True)
+    gh_endgroup()
+
+    write_summary([
+        "# 🚀 HiVo Configs",
+        "",
+        "**Xray:** " + ("✅ روشن" if S["xray"] else "❌ خاموش"),
+        "**زمان شروع:** `" + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "`",
+        "",
+        "---",
+        "",
+    ])
+
     first = True
     while True:
         try:
@@ -781,8 +991,11 @@ def refresh_loop():
             cycle(MAX_TO_TEST, DEEP_LIMIT, "full")
         except Exception:
             log.exception("cycle")
+            gh_error("دور کرش کرد: " + str(Exception))
         _update_sub_now("final")
-        log.info("⏰ waiting " + str(REFRESH_EVERY) + "s before next cycle")
+        print("", flush=True)
+        print("  " + C_DIM + "⏰ انتظار " + str(REFRESH_EVERY // 60) + " دقیقه..."
+              + C_RESET, flush=True)
         FORCE.wait(REFRESH_EVERY)
         FORCE.clear()
 
